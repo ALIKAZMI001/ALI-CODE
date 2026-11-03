@@ -1,0 +1,270 @@
+# Ali Code
+
+A Claude Code–style coding agent for your terminal. It reads and edits real
+files, runs commands, tracks a todo list, manages a pool of API keys, and asks
+before doing anything destructive — with the same visual language as Claude
+Code: the welcome panel, `⏺` tool calls, `⎿` results, a `>` prompt, the mode
+line, and the numbered permission dialog.
+
+```
+ ╭────────────────────────────────────────────────────────────────────╮
+ │                                                                    │
+ │                     ✻ Welcome to Ali Code!                         │
+ │                                                                    │
+ │         /help for help, /status for your current setup             │
+ │                                                                    │
+ │               cwd: C:\Users\you\Desktop\my-project                 │
+ │                                                                    │
+ ╰────────────────────────────────────────────────────────────────────╯
+
+  Tips for getting started:
+  1. Ask Ali to create a new app or clone a repository
+  2. Use Ali to help with file analysis, editing, bash commands and git
+  3. Be as specific as you would with another engineer for the best results
+  4. Run /init to create an AGENTS.md file with instructions for Ali
+
+  ※ OpenRouter · claude-sonnet-4.5 · 6 keys · default permissions
+
+╭────────────────────────────────────────────────────────────────────╮
+│ 14:32:05  > add a /health route                                    │
+╰────────────────────────────────────────────────────────────────────╯
+  ? for shortcuts
+
+────────────────────────────────────────────────────────────────────────
+I'll add the route, then run the tests to check it.
+────────────────────────────────────────────────────────────────────────
+
+⏺ Read(src/app.ts)
+  ⎿  Read 84 lines
+
+⏺ Update(src/app.ts)
+  ⎿  Updated src/app.ts with 6 additions and 0 removals
+
+⏺ Bash(npm test) · 14:32:09
+  ⎿  exit code: 0
+     42 tests passed
+```
+
+Every submitted question is boxed with the time it was entered, responses are
+framed with rules above and below, and shell commands carry their start time.
+
+Works with **OpenRouter**, **Groq**, **OpenAI**, or any OpenAI-compatible API.
+
+## Quick start
+
+```bash
+npm install
+cp .env.example .env        # Windows: copy .env.example .env
+# put your keys in .env
+npm run build
+npm link                    # makes the `ali` command available everywhere
+```
+
+Now, from any project folder:
+
+```bash
+ali code                                # interactive session
+ali code "add a health-check route"     # one task, then exit
+ali code -y "run the tests and fix them"  # no approval prompts
+ali code -C ../other-repo               # work in another folder
+ali code --resume                       # continue the last session here
+```
+
+`npm run dev` runs the same thing from source. `ali` on its own also works.
+
+## Keys: pools, rotation and failover
+
+Every provider accepts a comma-separated list. All keys are used, round-robin,
+so several small free quotas behave like one bigger one:
+
+```env
+OPENROUTER_API_KEYS=sk-or-v1-aaa,sk-or-v1-bbb
+GROQ_API_KEYS=gsk_aaa,gsk_bbb,gsk_ccc,gsk_ddd
+ALI_FALLBACK_PROVIDERS=groq
+```
+
+What happens on failure:
+
+| Failure | Behaviour |
+|---|---|
+| `401` / `403` bad key | key marked dead for the session, next key tried |
+| `402` no credits | key marked dead, next key, then next provider |
+| `429` rate limited | key cools down for 60s, next key |
+| `5xx` / timeout | key cools down for 20s, next key |
+
+The request is retried transparently on the next key or provider. If everything
+is exhausted you get a plain explanation instead of a stack trace.
+
+`/keys` shows the live state of every key. `/doctor` checks them against the
+provider.
+
+Because each key has its own free quota, the agent rotates keys between turns
+(`/cost` shows the total burn). Prompt caching is per key, so rotation trades a
+little cache reuse for much more headroom — a good trade on free tiers.
+
+## Tools
+
+Ali Code ships the full set of tools a coding agent normally needs:
+
+| Tool | Purpose |
+|---|---|
+| `Read` | read a file with line numbers |
+| `Write` | create or replace a file |
+| `Edit` | exact-string edit |
+| `MultiEdit` | several exact edits to one file in one call |
+| `List` | list the tree |
+| `Glob` | find files by pattern (`**/*.ts`) |
+| `Grep` | regex content search |
+| `Bash` | run a shell command |
+| `NotebookRead` / `NotebookEdit` | read and edit `.ipynb` cells |
+| `WebFetch` | fetch a URL as readable text |
+| `WebSearch` | search the web |
+| `Task` | delegate focused research to a subagent |
+| `Update Todos` | maintain the visible task list |
+
+Read-only tools run without asking. Edits and shell commands ask unless the mode
+says otherwise. `Task` subagents use the same tools (except `task`, so they
+cannot recurse) and report back a summary.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/help [command]` | list commands or explain one |
+| `/status` | folder, provider, model, keys, git branch, todos |
+| `/keys` | every key, its state, and cooldowns |
+| `/doctor` | check node, `.env`, keys and connectivity |
+| `/model [id]` | show or change the model |
+| `/models [filter]` | list models from the current provider |
+| `/provider [name]` | list routes or switch provider |
+| `/permissions [mode]` | show or change approval mode |
+| `/plan` | toggle read-only plan mode |
+| `/context` | context-window usage |
+| `/cost` (alias `/usage`) | token usage this session |
+| `/compact [hint]` | summarize history now |
+| `/todos` | show the task list |
+| `/undo` | revert the most recent file change |
+| `/diff` | show uncommitted git changes |
+| `/init` | analyze the repo and write `AGENTS.md` |
+| `/review` | review uncommitted changes, no edits |
+| `/export [path]` | write the transcript as markdown |
+| `/resume [id]` | list or load a saved session |
+| `/clear` | forget the conversation |
+| `/exit` | quit |
+
+Anything else is a message to the agent. `!command` runs a shell command
+directly, with the same approval rules.
+
+Start typing `/` and a palette appears under the input with every matching
+command (aliases included). **Tab** completes the highlighted one; Tab again
+cycles through the other matches. For example `/us` suggests `/usage` and
+`/status`.
+
+## Permission modes
+
+| Mode | Edits | Commands | Status line |
+|---|---|---|---|
+| `default` | ask | ask | `? for shortcuts` |
+| `accept-edits` | auto | ask | `⏵⏵ accept edits on` |
+| `plan` | blocked | blocked (read-only investigation) | `⏸ plan mode on` |
+| `yolo` | auto | auto | `⏵⏵ bypass permissions on` |
+
+Set with `/permissions <mode>`, `--permission-mode`, or **shift+tab** to cycle
+through `default → accept-edits → plan`. A small hard deny-list (`rm -rf /`,
+disk formatting, drive-wide deletes, shutdown) applies in **every** mode,
+including yolo. Paths are confined to the workspace root.
+
+Writes and commands show a Claude Code-style confirmation:
+
+```
+⏺ Bash(npm test)
+
+  npm test
+
+Do you want to proceed?
+❯ 1. Yes
+  2. Yes, and don't ask again for `npm test` commands
+  3. No, and tell Ali what to do differently
+```
+
+## How it works
+
+```
+src/
+  index.ts        CLI parsing (`ali code`), REPL, prompt, shift+tab, signals
+  agent.ts        the loop: stream → tool calls → results → repeat
+  keys.ts         key pools, round-robin rotation, failover, provider routing
+  tools.ts        read/write/edit/multi-edit/glob/grep/list/shell/notebook/web/task/todo
+  permissions.ts  tool schemas, approval modes, deny-list, previews
+  commands.ts     slash commands
+  session.ts      session persistence, undo snapshots, transcript export
+  todos.ts        todo list state and rendering
+  prompt.ts       system prompt (+ AGENTS.md / CLAUDE.md)
+  config.ts       provider/model/key/mode resolution, .env parsing
+  input.ts        readline wrapper that never loses a line
+  ui.ts           Claude Code–style rendering, spinner, diffs
+  util.ts         path sandboxing, tree walking, truncation
+```
+
+The loop in `Agent.run`:
+
+1. Push the user message.
+2. Compact history if it exceeds 75% of the context budget.
+3. Stream a completion with `tools` + `tool_choice: "auto"`.
+4. No tool calls? Done.
+5. Otherwise run each call (with approval), append one `tool` message per call,
+   and loop — up to `--max-iterations`.
+
+Design choices worth stealing:
+
+- **Exact-string edits.** `edit_file` refuses when `old_string` is missing or
+  ambiguous, and refuses if the file was not read this session.
+- **Truncation everywhere.** Tool output is capped at 30k chars (head + tail),
+  reads at 2,000 lines. One runaway command cannot blow the context.
+- **Stable system prompt.** Built once, so provider-side caching can hit.
+- **Compaction.** Old turns are summarized; the kept tail never starts with an
+  orphaned tool result.
+- **Denial counter.** After three refusals in a turn the agent stops instead of
+  arguing with you.
+- **Undo snapshots.** Every write is snapshotted before it happens.
+- **Persistent sessions.** Saved to `~/.ali-code/sessions/<folder-hash>/`, so
+  your repo stays clean. Old `~/.mini` sessions are still readable.
+
+## Configuration
+
+`.env` next to where you launch `ali`, or in the target folder:
+
+```env
+ALI_PROVIDER=openrouter
+ALI_MODEL=anthropic/claude-sonnet-4.5
+ALI_FALLBACK_PROVIDERS=groq
+OPENROUTER_API_KEYS=key1,key2
+GROQ_API_KEYS=key1,key2
+ALI_PERMISSION_MODE=default
+```
+
+The old `MINI_*` names still work.
+
+## Adding a tool
+
+1. Add a schema to `TOOL_DEFS` in `src/permissions.ts`.
+2. Add a `case` in `executeTool` in `src/tools.ts`.
+3. If it mutates anything, add a preview in `previewFor` and leave it out of
+   `READ_ONLY_TOOLS`.
+4. Add a `⏺` label in `toolLabel` and a `⎿` summary in `resultSummary`
+   (both in `src/ui.ts` / `src/permissions.ts`).
+
+## Testing
+
+See [TESTING.md](TESTING.md). Short version:
+
+```bash
+npm test          # 42 offline tests, no API calls, no credits
+```
+
+## Security
+
+This agent executes model-written shell commands on your machine. Keep approval
+prompts on for unfamiliar repos, and never run `--yolo` on code you do not
+trust. API keys sit in plaintext in `.env`; it is gitignored. Rotate any key that
+leaks.

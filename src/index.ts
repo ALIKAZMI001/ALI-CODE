@@ -1,0 +1,278 @@
+#!/usr/bin/env node
+import {
+  resolveConfig,
+  PROVIDERS,
+  PERMISSION_MODES,
+  type PermissionMode,
+  type ProviderName,
+} from "./config.js";
+import { buildRouter } from "./keys.js";
+import { Agent } from "./agent.js";
+import { Permissions } from "./permissions.js";
+import { LineReader } from "./input.js";
+import { Store, newSessionId, type PersistedSession } from "./session.js";
+import { dispatch, matchCommands, type CommandContext } from "./commands.js";
+import * as ui from "./ui.js";
+
+const VERSION = "1.0.0";
+
+interface Cli {
+  prompt: string[];
+  provider?: ProviderName;
+  model?: string;
+  yolo?: boolean;
+  dir?: string;
+  maxIterations?: number;
+  permissionMode?: PermissionMode;
+  resume?: true | string;
+}
+
+const HELP = `
+${ui.style.bold("Ali Code")} — a Claude Code-style coding agent for your terminal
+
+${ui.style.bold("Usage")}
+  ali code                        start an interactive session in this folder
+  ali code "add a /health route"  run one task, then exit
+  ali code --dir ../other-repo    work in another folder
+  ali code --resume               continue the most recent session here
+
+${ui.style.bold("Options")}
+  -y, --yolo                    never ask before using tools
+      --permission-mode <mode>  default | accept-edits | plan | yolo
+  -m, --model <id>              override the model
+      --provider <name>         openrouter | groq | openai
+  -C, --dir <path>              working directory
+      --resume[=<session-id>]   resume a saved session
+      --max-iterations <n>      cap on tool round-trips (default 40)
+  -h, --help                    show this
+  -v, --version                 show version
+
+${ui.style.bold("In the session")}
+  /help                 commands          !git status   run a shell command
+  /model <id>           change model      /keys         key pool status
+  /permissions <mode>   approval mode     /context      context usage
+  /compact              summarize         /resume       load a session
+  /init                 write AGENTS.md   /undo         revert last change
+
+  ${ui.style.dim("Tip: shift+tab cycles default → accept-edits → plan mode.")}
+  ${ui.style.dim("     Type / to see matching commands; tab completes them.")}
+`;
+
+function parseArgs(argv: string[]): Cli {
+  // `ali code …` is the documented invocation; `ali …` also works.
+  const args = argv[0] === "code" ? argv.slice(1) : argv;
+  const cli: Cli = { prompt: [] };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg.startsWith("--resume=")) {
+      cli.resume = arg.slice("--resume=".length);
+      continue;
+    }
+
+    switch (arg) {
+      case "-h":
+      case "--help":
+        process.stdout.write(HELP);
+        process.exit(0);
+      case "-v":
+      case "--version":
+        process.stdout.write(`ali-code ${VERSION}\n`);
+        process.exit(0);
+      case "-y":
+      case "--yolo":
+        cli.yolo = true;
+        cli.permissionMode = "yolo";
+        break;
+      case "-m":
+      case "--model":
+        cli.model = args[++i];
+        break;
+      case "--provider": {
+        const value = args[++i];
+        if (!value || !(value in PROVIDERS)) {
+          ui.error(`Unknown provider "${value}". Use: ${Object.keys(PROVIDERS).join(", ")}`);
+          process.exit(1);
+        }
+        cli.provider = value as ProviderName;
+        break;
+      }
+      case "--permission-mode": {
+        const value = args[++i] as PermissionMode;
+        if (!PERMISSION_MODES.includes(value)) {
+          ui.error(`Unknown mode "${value}". Use: ${PERMISSION_MODES.join(", ")}`);
+          process.exit(1);
+        }
+        cli.permissionMode = value;
+        break;
+      }
+      case "-C":
+      case "--dir":
+        cli.dir = args[++i];
+        break;
+      case "--resume":
+      case "--continue":
+        cli.resume = true;
+        break;
+      case "--max-iterations":
+        cli.maxIterations = Number(args[++i]);
+        break;
+      default:
+        if (arg.startsWith("-") && arg !== "-") {
+          ui.error(`Unknown option: ${arg}. Try --help.`);
+          process.exit(1);
+        }
+        cli.prompt.push(arg);
+    }
+  }
+
+  return cli;
+}
+
+async function main(): Promise<void> {
+  const cli = parseArgs(process.argv.slice(2));
+  const cfg = resolveConfig({
+    provider: cli.provider,
+    model: cli.model,
+    yolo: cli.yolo,
+    cwd: cli.dir,
+    maxIterations: cli.maxIterations,
+    permissionMode: cli.permissionMode,
+  });
+
+  const router = buildRouter(cfg);
+  const store = new Store(cfg.cwd);
+
+  let resumed: PersistedSession | null = null;
+  if (cli.resume) {
+    resumed = cli.resume === true ? store.latest() : store.load(cli.resume);
+    if (!resumed) {
+      ui.warn("no saved session found; starting a new one");
+    }
+  }
+
+  const reader = new LineReader();
+  const permissions = new Permissions((question) => reader.ask(question, false), cfg.permissionMode);
+  const agent = new Agent(
+    router,
+    cfg,
+    permissions,
+    store,
+    resumed?.id ?? newSessionId(),
+    resumed?.createdAt
+  );
+
+  if (resumed) {
+    agent.restore(resumed);
+    if (resumed.provider === router.provider) router.model = resumed.model;
+  }
+
+  const ctx: CommandContext = { agent, cfg, router, perms: permissions, reader, store };
+
+  const onInterrupt = (): void => {
+    if (agent.busy) {
+      agent.interrupt();
+      return;
+    }
+    process.stdout.write("\n");
+    agent.persist();
+    reader.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", onInterrupt);
+  reader.onInterrupt = onInterrupt;
+
+  // Shift+Tab cycles the modes Claude Code cycles. yolo is opt-in via flags.
+  const CYCLE: PermissionMode[] = ["default", "accept-edits", "plan"];
+  reader.onCycleMode = (): void => {
+    const index = CYCLE.indexOf(permissions.mode);
+    const next = CYCLE[(index + 1) % CYCLE.length] ?? "default";
+    permissions.setMode(next);
+    cfg.permissionMode = next;
+    ui.modeFlash(next);
+    reader.reprompt(ui.promptFor(next));
+  };
+
+  // Slash-command palette: matches appear live under the input, Tab completes.
+  let lastCompleted = "";
+  let lastMatches: string[] = [];
+  let lastIndex = -1;
+
+  reader.onSuggest = (line: string): string | null => {
+    if (!line.startsWith("/") || line.includes(" ")) return null;
+    const matches = matchCommands(line);
+    if (matches.length === 0) return null;
+    return ui.suggestionLine(matches);
+  };
+
+  reader.onComplete = (line: string): string | null => {
+    if (!line.startsWith("/") || line.includes(" ")) return null;
+
+    let matches: string[];
+    if (line === lastCompleted && lastMatches.length > 0) {
+      matches = lastMatches;
+      lastIndex = (lastIndex + 1) % matches.length;
+    } else {
+      matches = matchCommands(line);
+      lastIndex = 0;
+    }
+
+    if (matches.length === 0) return null;
+    const pick = matches[lastIndex];
+    lastCompleted = pick;
+    lastMatches = matches;
+    return pick;
+  };
+
+  ui.banner({
+    model: router.model,
+    provider: router.providerLabel,
+    cwd: cfg.cwd,
+    mode: permissions.mode,
+    keys: router.totalKeys(),
+    resumed: resumed?.id,
+  });
+
+  // One-shot mode.
+  if (cli.prompt.length > 0) {
+    await agent.run(cli.prompt.join(" "));
+    reader.close();
+    return;
+  }
+
+  // Interactive REPL.
+  for (;;) {
+    ui.promptTop();
+    const line = await reader.ask(ui.promptFor(permissions.mode));
+    if (line === null) {
+      process.stdout.write("\n");
+      break;
+    }
+
+    const input = line.trim();
+    if (!input) continue;
+
+    ui.promptBottom(permissions.mode);
+
+    if (input.startsWith("/")) {
+      await dispatch(input, ctx);
+      continue;
+    }
+
+    if (input.startsWith("!")) {
+      await agent.runShell(input.slice(1).trim());
+      continue;
+    }
+
+    await agent.run(input);
+  }
+
+  agent.persist();
+  reader.close();
+}
+
+main().catch((err) => {
+  ui.error(`fatal: ${err?.message ?? String(err)}`);
+  process.exit(1);
+});
