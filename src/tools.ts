@@ -22,6 +22,8 @@ export interface ToolContext {
   todos: TodoList;
   /** Supplied by the Agent so the `task` tool can spawn a subagent. */
   runSubagent?: (prompt: string) => Promise<string>;
+  /** Supplied by the CLI so the `ask_user` tool can reach the terminal. */
+  askUser?: (question: string, options?: string[]) => Promise<string | null>;
 }
 
 export const MAX_TOOL_OUTPUT = 30_000;
@@ -58,6 +60,27 @@ export async function executeTool(
       return webFetch(input);
     case "web_search":
       return webSearch(input);
+    case "weather":
+      return weather(input);
+    case "ask_user": {
+      const question = String(input?.question ?? "").trim();
+      if (!question) throw new ToolError("question is required");
+      if (!ctx.askUser) throw new ToolError("No interactive user is available.");
+      const options = Array.isArray(input?.options)
+        ? input.options.map((option: any) => String(option))
+        : [];
+      const answer = await ctx.askUser(question, options);
+      if (answer === null) throw new ToolError("The user cancelled the question.");
+      return `The user answered: ${answer.trim() || "(no answer)"}`;
+    }
+    case "move_file":
+      return moveFile(input, ctx);
+    case "delete_file":
+      return deleteFile(input, ctx);
+    case "bash_output":
+      return bashOutput(input);
+    case "kill_shell":
+      return killShell(input);
     case "task": {
       const prompt = String(input?.prompt ?? "").trim();
       if (!prompt) throw new ToolError("prompt is required");
@@ -292,6 +315,8 @@ function runCommand(input: any, ctx: ToolContext): Promise<string> {
   const timeoutMs =
     Math.min(Math.max(Number(input.timeout_seconds) || 120, 1), 600) * 1000;
 
+  if (input.background) return Promise.resolve(startBackground(command, ctx));
+
   const isWindows = process.platform === "win32";
   const file = isWindows ? "powershell.exe" : "bash";
   const args = isWindows
@@ -351,6 +376,306 @@ function runCommand(input: any, ctx: ToolContext): Promise<string> {
 }
 
 /* ------------------------------------------------------------------ *
+ * Background shells
+ * ------------------------------------------------------------------ */
+
+interface BackgroundShell {
+  id: string;
+  command: string;
+  child: ReturnType<typeof spawn>;
+  stdout: string;
+  stderr: string;
+  startedAt: number;
+  done: boolean;
+  code: number | null;
+}
+
+const backgroundShells = new Map<string, BackgroundShell>();
+let shellCounter = 0;
+
+function shellInvocation(command: string): { file: string; args: string[] } {
+  return process.platform === "win32"
+    ? { file: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", command] }
+    : { file: "bash", args: ["-lc", command] };
+}
+
+function startBackground(command: string, ctx: ToolContext): string {
+  const { file, args } = shellInvocation(command);
+  const id = `shell-${++shellCounter}`;
+  const child = spawn(file, args, {
+    cwd: ctx.cwd,
+    env: process.env,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const entry: BackgroundShell = {
+    id,
+    command,
+    child,
+    stdout: "",
+    stderr: "",
+    startedAt: Date.now(),
+    done: false,
+    code: null,
+  };
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    if (entry.stdout.length < MAX_TOOL_OUTPUT * 2) entry.stdout += chunk.toString();
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    if (entry.stderr.length < MAX_TOOL_OUTPUT * 2) entry.stderr += chunk.toString();
+  });
+  child.on("error", (err) => {
+    entry.stderr += `failed to start: ${err.message}\n`;
+    entry.done = true;
+  });
+  child.on("close", (code) => {
+    entry.done = true;
+    entry.code = code;
+  });
+
+  backgroundShells.set(id, entry);
+  return [
+    `Started ${id} in the background: ${command}`,
+    `Use bash_output("${id}") to read output and kill_shell("${id}") to stop it.`,
+  ].join("\n");
+}
+
+function lookupShell(input: any): BackgroundShell {
+  const id = String(input?.shell_id ?? "").trim();
+  if (!id) throw new ToolError("shell_id is required");
+  const entry = backgroundShells.get(id);
+  if (!entry) {
+    const known = [...backgroundShells.keys()].join(", ") || "(none)";
+    throw new ToolError(`Unknown shell "${id}". Known shells: ${known}.`);
+  }
+  return entry;
+}
+
+function bashOutput(input: any): string {
+  const entry = lookupShell(input);
+  const elapsed = Math.round((Date.now() - entry.startedAt) / 1000);
+  const status = entry.done
+    ? `exited with code ${entry.code ?? "null"}`
+    : `still running (${elapsed}s)`;
+  const out = entry.stdout.trim();
+  const err = entry.stderr.trim();
+
+  return truncate(
+    [
+      `# ${entry.id}: ${entry.command}`,
+      status,
+      out ? `stdout:\n${out}` : "",
+      err ? `stderr:\n${err}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n") || status,
+    MAX_TOOL_OUTPUT
+  );
+}
+
+function killShell(input: any): string {
+  const entry = lookupShell(input);
+  if (entry.done) return `${entry.id} already exited with code ${entry.code ?? "null"}.`;
+
+  try {
+    if (process.platform === "win32" && entry.child.pid) {
+      spawn("taskkill", ["/pid", String(entry.child.pid), "/t", "/f"], { windowsHide: true });
+    } else {
+      entry.child.kill("SIGTERM");
+    }
+  } catch (err: any) {
+    throw new ToolError(`Could not stop ${entry.id}: ${err?.message ?? String(err)}`);
+  }
+
+  return `Stopped ${entry.id}.`;
+}
+
+/* ------------------------------------------------------------------ *
+ * File moves and deletes
+ * ------------------------------------------------------------------ */
+
+function moveFile(input: any, ctx: ToolContext): string {
+  const from = String(input?.from ?? "").trim();
+  const to = String(input?.to ?? "").trim();
+  if (!from || !to) throw new ToolError("from and to are required");
+
+  const source = resolveInside(ctx.cwd, from);
+  const target = resolveInside(ctx.cwd, to);
+
+  if (!fs.existsSync(source)) throw new ToolError(`File not found: ${from}`);
+  if (fs.statSync(source).isDirectory()) {
+    throw new ToolError("move_file only moves files. Use run_command for directories.");
+  }
+  if (source === target) return `${from} is already at ${to}.`;
+
+  if (fs.existsSync(target)) {
+    if (!input?.overwrite) {
+      throw new ToolError(`${to} already exists. Set overwrite: true to replace it.`);
+    }
+    if (fs.statSync(target).isDirectory()) throw new ToolError(`${to} is a directory.`);
+    ctx.history.snapshot(target);
+    fs.rmSync(target, { force: true });
+  }
+
+  ctx.history.snapshot(source);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.renameSync(source, target);
+  ctx.readFiles.delete(source);
+  return `Moved ${from} → ${to}.`;
+}
+
+function deleteFile(input: any, ctx: ToolContext): string {
+  const rel = String(input?.path ?? "").trim();
+  if (!rel) throw new ToolError("path is required");
+
+  const abs = resolveInside(ctx.cwd, rel);
+  if (!fs.existsSync(abs)) throw new ToolError(`File not found: ${rel}`);
+
+  if (fs.statSync(abs).isDirectory()) {
+    if (!input?.recursive) {
+      throw new ToolError(`${rel} is a directory. Set recursive: true to delete it.`);
+    }
+    fs.rmSync(abs, { recursive: true, force: true });
+    return `Deleted directory ${rel}.`;
+  }
+
+  ctx.history.snapshot(abs);
+  fs.unlinkSync(abs);
+  ctx.readFiles.delete(abs);
+  return `Deleted ${rel}.`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Weather (Open-Meteo, no API key)
+ * ------------------------------------------------------------------ */
+
+const WEATHER_CODES: Record<number, string> = {
+  0: "clear",
+  1: "mainly clear",
+  2: "partly cloudy",
+  3: "overcast",
+  45: "fog",
+  48: "freezing fog",
+  51: "light drizzle",
+  53: "drizzle",
+  55: "heavy drizzle",
+  56: "freezing drizzle",
+  57: "heavy freezing drizzle",
+  61: "light rain",
+  63: "rain",
+  65: "heavy rain",
+  66: "freezing rain",
+  67: "heavy freezing rain",
+  71: "light snow",
+  73: "snow",
+  75: "heavy snow",
+  77: "snow grains",
+  80: "light rain showers",
+  81: "rain showers",
+  82: "violent rain showers",
+  85: "snow showers",
+  86: "heavy snow showers",
+  95: "thunderstorm",
+  96: "thunderstorm with hail",
+  99: "thunderstorm with heavy hail",
+};
+
+function describeWeather(code: number): string {
+  return WEATHER_CODES[code] ?? "unknown conditions";
+}
+
+async function weather(input: any): Promise<string> {
+  const location = String(input?.location ?? "").trim();
+  if (!location) throw new ToolError("location is required");
+
+  const days = Math.min(Math.max(Math.floor(Number(input?.days) || 3), 1), 7);
+  const imperial = String(input?.units ?? "metric").toLowerCase() === "imperial";
+
+  let place: any;
+  try {
+    const response = await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
+        location
+      )}&count=1&language=en&format=json`,
+      { signal: AbortSignal.timeout(20_000) }
+    );
+    if (!response.ok) throw new Error(`geocoding HTTP ${response.status}`);
+    const data: any = await response.json();
+    place = data?.results?.[0];
+  } catch (err: any) {
+    throw new ToolError(`Could not look up ${location}: ${err?.message ?? String(err)}`);
+  }
+
+  if (!place) {
+    throw new ToolError(`No place found for "${location}". Try "City, Country".`);
+  }
+
+  const params = new URLSearchParams({
+    latitude: String(place.latitude),
+    longitude: String(place.longitude),
+    current:
+      "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m",
+    daily:
+      "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max",
+    timezone: "auto",
+    forecast_days: String(days),
+  });
+  if (imperial) {
+    params.set("temperature_unit", "fahrenheit");
+    params.set("wind_speed_unit", "mph");
+    params.set("precipitation_unit", "inch");
+  }
+
+  let data: any;
+  try {
+    const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) throw new Error(`forecast HTTP ${response.status}`);
+    data = await response.json();
+  } catch (err: any) {
+    throw new ToolError(`Could not fetch weather for ${location}: ${err?.message ?? String(err)}`);
+  }
+
+  const unit = imperial ? "°F" : "°C";
+  const speed = imperial ? "mph" : "km/h";
+  const rain = imperial ? "in" : "mm";
+  const round = (value: any): string => {
+    const number = Number(value);
+    return Number.isFinite(number) ? String(Math.round(number)) : "?";
+  };
+
+  const current = data?.current ?? {};
+  const daily = data?.daily ?? {};
+  const placeName = [place.name, place.admin1, place.country].filter(Boolean).join(", ");
+  const days_out = Array.isArray(daily.time) ? daily.time : [];
+
+  return [
+    `# Weather for ${placeName}`,
+    `Now: ${round(current.temperature_2m)}${unit} (feels ${round(
+      current.apparent_temperature
+    )}${unit}), ${describeWeather(Number(current.weather_code))} · humidity ${round(
+      current.relative_humidity_2m
+    )}% · wind ${round(current.wind_speed_10m)} ${speed} · rain ${round(
+      current.precipitation
+    )} ${rain}`,
+    `Local time: ${current.time ?? "now"}`,
+    "",
+    "Forecast:",
+    ...days_out.map(
+      (day: string, index: number) =>
+        `- ${day}: ${round(daily.temperature_2m_min?.[index])}–${round(
+          daily.temperature_2m_max?.[index]
+        )}${unit}, ${describeWeather(Number(daily.weather_code?.[index]))}, ${round(
+          daily.precipitation_probability_max?.[index]
+        )}% rain, wind ${round(daily.wind_speed_10m_max?.[index])} ${speed}`
+    ),
+  ].join("\n");
+}
+
+/* ------------------------------------------------------------------ *
  * Extra tools: glob, multi_edit, notebooks, web, subagents
  * ------------------------------------------------------------------ */
 
@@ -403,7 +728,7 @@ function globFiles(input: any, ctx: ToolContext): string {
   }
 
   if (results.length === 0) return `No files matched ${pattern} under ${rel}.`;
-  const suffix = results.length >= 500 ? "\n� capped at 500 files" : "";
+  const suffix = results.length >= 500 ? "\n… capped at 500 files" : "";
   return `${results.length} file${results.length === 1 ? "" : "s"} matched ${pattern}:\n${results.join(
     "\n"
   )}${suffix}`;

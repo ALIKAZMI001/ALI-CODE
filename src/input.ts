@@ -115,6 +115,69 @@ export class LineReader {
     );
   }
 
+  /**
+   * Arrow-key menu. ↑/↓ (or k/j) move, 1-9 pick directly, Enter confirms,
+   * Esc cancels. Resolves to the chosen index, or null on cancel / no TTY.
+   * While open, readline's own key handling is detached so nothing is echoed.
+   */
+  select(
+    count: number,
+    render: (index: number, active: boolean) => string,
+    initial = 0
+  ): Promise<number | null> {
+    if (!process.stdin.isTTY || this.closed || count <= 0) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+      const stdin = process.stdin;
+      const out = process.stdout;
+      const saved = stdin.listeners("keypress") as Array<(...args: any[]) => void>;
+      for (const listener of saved) stdin.off("keypress", listener);
+
+      let index = Math.min(Math.max(initial, 0), count - 1);
+      const draw = (first: boolean): void => {
+        if (!first) out.write(`\u001b[${count}A`);
+        for (let i = 0; i < count; i++) {
+          out.write("\r\u001b[2K" + render(i, i === index) + "\n");
+        }
+      };
+
+      const finish = (result: number | null): void => {
+        stdin.off("keypress", onKey);
+        for (const listener of saved) stdin.on("keypress", listener);
+        out.write("\u001b[?25h");
+        resolve(result);
+      };
+
+      const onKey = (sequence: string, key: readline.Key | undefined): void => {
+        if (!key) return;
+        if (key.ctrl && key.name === "c") {
+          finish(null);
+          this.onInterrupt?.();
+          return;
+        }
+        if (key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift)) {
+          index = (index - 1 + count) % count;
+          draw(false);
+        } else if (key.name === "down" || key.name === "j" || key.name === "tab") {
+          index = (index + 1) % count;
+          draw(false);
+        } else if (key.name === "return" || key.name === "enter") {
+          finish(index);
+        } else if (key.name === "escape") {
+          finish(null);
+        } else if (sequence && /^[1-9]$/.test(sequence) && Number(sequence) <= count) {
+          index = Number(sequence) - 1;
+          draw(false);
+          finish(index);
+        }
+      };
+
+      out.write("\u001b[?25l");
+      draw(true);
+      stdin.on("keypress", onKey);
+    });
+  }
+
   /** Redraw the live input line, e.g. after the permission mode changes. */
   reprompt(prompt?: string): void {
     if (!process.stdin.isTTY) return;
@@ -167,10 +230,16 @@ export class LineReader {
    */
   private renderSubmitted(line: string): void {
     this.suggestionDrawn = false;
-    if (!process.stdin.isTTY || !this.boxLine) return;
+    if (!process.stdin.isTTY) return;
 
-    process.stdout.write("\r\u001b[2K\u001b[A\r\u001b[2K");
-    if (!line.trim()) return;
+    // After Enter the cursor sits one row below the prompt (suggestion line or
+    // blank); erase that row and the prompt row before drawing the box.
+    // A long question wraps over several terminal rows: erase all of them.
+    const cols = Math.max(1, process.stdout.columns ?? 80);
+    const used = [...this.promptText.replace(ANSI, "")].length + [...line].length;
+    const rows = Math.max(1, Math.ceil(used / cols));
+    process.stdout.write("\r\u001b[2K" + "\u001b[A".repeat(rows) + "\r\u001b[J");
+    if (!this.boxLine || !line.trim()) return;
 
     process.stdout.write(submittedMessage(line) + "\n");
   }

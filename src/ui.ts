@@ -55,45 +55,37 @@ export function banner(info: {
   keys: number;
   resumed?: string;
 }): void {
-  const width = Math.max(56, Math.min(terminalWidth() - 2, 96));
+  const width = boxWidth();
+  const pad = margin();
   const inner = width - 4;
+  const edge = style.orange("│");
 
   const boxed = (text = "", center = false): string => {
     const length = visibleLength(text);
     const left = center ? Math.max(0, Math.floor((inner - length) / 2)) : 0;
     const right = Math.max(0, inner - length - left);
-    return (
-      style.gray("│") +
-      " " +
-      " ".repeat(left) +
-      text +
-      " ".repeat(right) +
-      " " +
-      style.gray("│")
-    );
+    return edge + " " + " ".repeat(left) + text + " ".repeat(right) + " " + edge;
   };
 
-  const top = style.gray("╭" + "─".repeat(width - 2) + "╮");
-  const bottom = style.gray("╰" + "─".repeat(width - 2) + "╯");
-  const empty = boxed();
+  const title = ` ${style.bold(style.orange("✻ Ali Code"))} ${style.dim("v1.0")} `;
+  const topFill = Math.max(0, width - 4 - visibleLength(title));
+  const top = style.orange("╭──") + title + style.orange("─".repeat(topFill) + "╮");
+  const bottom = style.orange("╰" + "─".repeat(width - 2) + "╯");
 
   const lines = [
-    " " + top,
+    top,
     boxed(),
-    boxed(style.bold(style.orange("✻ Welcome to Ali Code!")), true),
+    boxed(style.bold("Welcome to Ali Code!"), true),
+    boxed(style.gray("your AI coding agent for the terminal"), true),
     boxed(),
-    boxed(style.gray("/help for help, /status for your current setup"), true),
-    boxed(),
-    boxed(style.gray(`cwd: ${clip(info.cwd, inner - 8)}`), true),
-    boxed(),
+    boxed(style.gray("/help for help · /status for your current setup"), true),
+    boxed(style.gray(`cwd: ${clip(info.cwd, inner - 6)}`), true),
   ];
 
   if (info.resumed) {
     lines.push(boxed(style.gray(`resumed session ${info.resumed}`), true));
-    lines.push(boxed());
   }
-
-  lines.push(" " + bottom);
+  lines.push(boxed(), bottom);
 
   const modeName =
     info.mode === "yolo"
@@ -104,49 +96,218 @@ export function banner(info: {
           ? "accept edits"
           : "default permissions";
 
+  const tip = (n: number, text: string): string =>
+    `${pad}  ${style.orange(String(n) + ".")} ${style.gray(text)}\n`;
+
   write(
     "\n" +
-      lines.join("\n") +
+      lines.map((l) => pad + l).join("\n") +
       "\n\n" +
-      "  Tips for getting started:\n" +
-      `  1. Ask Ali to create a new app or clone a repository\n` +
-      `  2. Use Ali to help with file analysis, editing, bash commands and git\n` +
-      `  3. Be as specific as you would with another engineer for the best results\n` +
-      `  4. Run /init to create an AGENTS.md file with instructions for Ali\n` +
+      pad + "  " + style.bold("Tips for getting started") + "\n" +
+      tip(1, "Ask Ali to create a new app or clone a repository") +
+      tip(2, "Use Ali for file analysis, editing, bash commands and git") +
+      tip(3, "Be as specific as you would with another engineer") +
+      tip(4, "Run /init to create an AGENTS.md file with instructions for Ali") +
       "\n" +
+      pad + "  " + style.orange("※") + " " +
       style.gray(
-        `  ※ ${info.provider} · ${info.model} · ${info.keys} key${
-          info.keys === 1 ? "" : "s"
-        } · ${modeName}`
+        `${info.provider} · ${info.model} · ${info.keys} key${info.keys === 1 ? "" : "s"} · ${modeName}`
       ) +
       "\n\n"
   );
 }
 
 /* ------------------------------------------------------------------ *
- * Assistant text
+ * Boxes: one shape for questions, answers and command output
+ * ------------------------------------------------------------------ */
+
+/** Left padding that centres the layout in wide terminals. */
+export function margin(): string {
+  const cols = process.stdout.columns ?? 80;
+  return " ".repeat(Math.max(1, Math.floor((cols - boxWidth()) / 2)));
+}
+
+function boxWidth(): number {
+  return Math.max(40, Math.min(terminalWidth() - 2, 100));
+}
+
+/** Greedy word wrap that keeps blank lines and leading indentation. */
+export function wrapText(text: string, width: number): string[] {
+  const out: string[] = [];
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+
+  for (const line of lines) {
+    if (line === "") {
+      out.push("");
+      continue;
+    }
+
+    const indent = /^[ \t]*/.exec(line)?.[0] ?? "";
+    let remaining = line.slice(indent.length);
+    if (!remaining) {
+      out.push(indent);
+      continue;
+    }
+
+    let first = true;
+    while (remaining.length > 0) {
+      const available = Math.max(1, width - (first ? indent.length : 0));
+      if (visibleLength(remaining) <= available) {
+        out.push((first ? indent : "") + remaining);
+        break;
+      }
+
+      let cut = remaining.lastIndexOf(" ", available);
+      if (cut <= 0) cut = available;
+      out.push((first ? indent : "") + remaining.slice(0, cut));
+      remaining = remaining.slice(cut).replace(/^ +/, "");
+      first = false;
+    }
+  }
+
+  return out.length > 0 ? out : [""];
+}
+
+function padTo(text: string, width: number): string {
+  const length = visibleLength(text);
+  return length >= width ? text : text + " ".repeat(width - length);
+}
+
+function framedLine(text: string, inner: number): string {
+  return margin() + style.gray("│") + " " + padTo(text, inner) + " " + style.gray("│");
+}
+
+/** ╭─ Title ─────────────────────────────────────────────╮ */
+export function topBorder(title = "", width = boxWidth()): string {
+  if (!title) return margin() + style.gray("╭" + "─".repeat(width - 2) + "╮");
+  const fill = Math.max(0, width - 5 - visibleLength(title));
+  return margin() + style.gray("╭─ ") + title + style.gray(" " + "─".repeat(fill) + "╮");
+}
+
+/** ╰──────────────────────────────────────── 1.4s ╯ */
+export function bottomBorder(note = "", width = boxWidth()): string {
+  if (!note) return margin() + style.gray("╰" + "─".repeat(width - 2) + "╯");
+  const fill = Math.max(0, width - 4 - visibleLength(note));
+  return margin() + style.gray("╰" + "─".repeat(fill) + " ") + style.dim(note) + style.gray(" ╯");
+}
+
+/* ------------------------------------------------------------------ *
+ * Assistant text — streamed inside its own box
  * ------------------------------------------------------------------ */
 
 let assistantOpen = false;
+let assistantStartedAt = 0;
+let assistantBoxWidth = 0;
+let assistantLine = "";
+let assistantPartial = false;
+let assistantWroteBody = false;
+
+function assistantTop(): string {
+  const stamp = new Date(assistantStartedAt).toTimeString().slice(0, 8);
+  return topBorder(
+    `${style.orange("✻")} ${style.bold("Ali")} ${style.dim("· " + stamp)}`,
+    assistantBoxWidth
+  );
+}
+
+function clearAssistantPartial(): void {
+  if (!assistantPartial) return;
+  write("\r\u001b[2K");
+  assistantPartial = false;
+}
+
+/** Print the in-progress line, padded so the right border always lines up. */
+function drawAssistantPartial(): void {
+  clearAssistantPartial();
+  write(framedLine(assistantLine, assistantBoxWidth - 4));
+  assistantPartial = true;
+}
+
+/** Finish one wrapped line and move to the next row inside the box. */
+function commitAssistantLine(text: string): void {
+  clearAssistantPartial();
+  write(framedLine(text, assistantBoxWidth - 4) + "\n");
+  assistantWroteBody = true;
+}
 
 export function assistantStart(): void {
   if (assistantOpen) return;
   assistantOpen = true;
+  assistantStartedAt = Date.now();
+  assistantBoxWidth = boxWidth();
+  assistantLine = "";
+  assistantPartial = false;
+  assistantWroteBody = false;
   stopThinking();
-  write("\n" + rule() + "\n");
+  write("\n" + assistantTop() + "\n");
 }
 
 export function assistantDelta(text: string): void {
+  if (!text) return;
   stopThinking();
   assistantStart();
-  write(text);
+
+  const inner = assistantBoxWidth - 4;
+  for (const ch of text) {
+    if (ch === "\n") {
+      const done = assistantLine.replace(/[ \t]+$/, "");
+      assistantLine = "";
+      commitAssistantLine(done);
+      continue;
+    }
+
+    assistantLine += ch;
+    if (visibleLength(assistantLine) <= inner) continue;
+
+    // Overflowed: break at the last space, or hard-break a long word.
+    const chars = [...assistantLine];
+    let breakAt = -1;
+    for (let i = Math.min(chars.length, inner); i > 0; i--) {
+      if (/\s/.test(chars[i - 1])) {
+        breakAt = i - 1;
+        break;
+      }
+    }
+
+    if (breakAt > 0) {
+      const head = chars.slice(0, breakAt).join("");
+      assistantLine = chars.slice(breakAt + 1).join("").replace(/^ +/, "");
+      commitAssistantLine(head.replace(/[ \t]+$/, ""));
+    } else {
+      const head = chars.slice(0, inner).join("");
+      assistantLine = chars.slice(inner).join("");
+      commitAssistantLine(head);
+    }
+  }
+
+  drawAssistantPartial();
 }
 
 export function assistantEnd(): void {
   stopThinking();
   if (!assistantOpen) return;
   assistantOpen = false;
-  write("\n" + rule() + "\n");
+
+  const tail = assistantLine.replace(/[ \t]+$/, "");
+  if (tail.length > 0) {
+    assistantLine = "";
+    commitAssistantLine(tail);
+  } else {
+    clearAssistantPartial();
+  }
+
+  if (assistantWroteBody) {
+    const elapsed = Date.now() - assistantStartedAt;
+    const note = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${elapsed}ms`;
+    write(bottomBorder(note, assistantBoxWidth) + "\n");
+  } else {
+    // Nothing streamed: remove the title line and the blank line above it.
+    write("\r\u001b[2K\u001b[A\r\u001b[2K\u001b[A\r\u001b[2K\n");
+  }
+
+  assistantLine = "";
+  assistantPartial = false;
+  assistantWroteBody = false;
 }
 
 /* ------------------------------------------------------------------ *
@@ -168,7 +329,7 @@ export function startThinking(label = "Thinking"): void {
     const elapsed = seconds > 0 ? ` (${seconds}s · esc to interrupt)` : " (esc to interrupt)";
     const frame = SPINNER_FRAMES[spinnerFrame++ % SPINNER_FRAMES.length];
     write(
-      "\r\u001b[2K" +
+      "\r\u001b[2K" + margin() +
         style.orange(frame) +
         " " +
         style.bold(label + "…") +
@@ -218,12 +379,43 @@ export function toolLabel(name: string): string {
       return "WebFetch";
     case "web_search":
       return "WebSearch";
+    case "weather":
+      return "Weather";
+    case "ask_user":
+      return "AskUser";
+    case "move_file":
+      return "Move";
+    case "delete_file":
+      return "Delete";
+    case "bash_output":
+      return "BashOutput";
+    case "kill_shell":
+      return "KillShell";
     case "task":
       return "Task";
     case "todo_write":
       return "Update Todos";
     default:
       return name;
+  }
+}
+
+function toolIcon(name: string): string {
+  switch (name) {
+    case "read_file": case "notebook_read": return "📖";
+    case "write_file": return "📝";
+    case "edit_file": case "multi_edit": case "notebook_edit": return "✏️ ";
+    case "list_files": return "📂";
+    case "search": case "glob": return "🔎";
+    case "run_command": case "bash_output": case "kill_shell": return "⚡";
+    case "web_fetch": case "web_search": return "🌐";
+    case "weather": return "🌤️ ";
+    case "ask_user": return "❓";
+    case "move_file": return "📦";
+    case "delete_file": return "🗑️ ";
+    case "task": return "🤖";
+    case "todo_write": return "✅";
+    default: return "🔧";
   }
 }
 
@@ -236,7 +428,7 @@ export function toolStart(name: string, summary: string, at?: Date): void {
     name === "todo_write" || !summary ? "" : style.white(`(${summary})`);
   const stamp = at ? style.dim(` · ${at.toTimeString().slice(0, 8)}`) : "";
 
-  write(`\n${style.orange("⏺")} ${style.bold(label)}${detail}${stamp}\n`);
+  write(`\n${margin()}${style.orange("⏺")} ${style.bold(toolIcon(name) + " " + label)}${detail}${stamp}\n`);
 }
 
 export function toolEnd(ok: boolean, summary: string | string[]): void {
@@ -244,9 +436,9 @@ export function toolEnd(ok: boolean, summary: string | string[]): void {
   const lines = raw.length > 0 ? raw : [""];
   const tint = ok ? style.gray : style.red;
 
-  write(`  ${ok ? style.gray("⎿") : style.red("⎿")}  ${tint(lines[0])}\n`);
+  write(`${margin()}  ${ok ? style.gray("⎿") : style.red("⎿")}  ${tint(lines[0])}\n`);
   for (const line of lines.slice(1)) {
-    write(`     ${tint(line)}\n`);
+    write(`${margin()}     ${tint(line)}\n`);
   }
 }
 
@@ -256,30 +448,26 @@ export function toolEnd(ok: boolean, summary: string | string[]): void {
 
 export function info(text: string): void {
   assistantEnd();
-  write(style.gray(text) + "\n");
+  write(margin() + style.gray(text) + "\n");
 }
 
 export function warn(text: string): void {
   assistantEnd();
-  write(style.yellow(text) + "\n");
+  write(margin() + style.yellow(text) + "\n");
 }
 
 export function error(text: string): void {
   assistantEnd();
-  write(style.red(text) + "\n");
+  write(margin() + style.red(text) + "\n");
 }
 
 /* ------------------------------------------------------------------ *
- * Prompt: a rule above the input, and the mode line below it
+ * Prompt: the input line, and the mode line below it
  * ------------------------------------------------------------------ */
 
-function rule(): string {
-  return style.gray("─".repeat(terminalWidth() - 1));
-}
-
 export function promptFor(mode: string): string {
-  if (mode === "plan") return style.blue("> ");
-  return style.bold("> ");
+  if (mode === "plan") return margin() + style.blue("> ");
+  return margin() + style.bold("> ");
 }
 
 export function promptTop(): void {
@@ -287,32 +475,28 @@ export function promptTop(): void {
 }
 
 export function promptBottom(mode: string): void {
-  write("  " + modeStatus(mode) + "\n");
+  write(margin() + "  " + modeStatus(mode) + "\n");
 }
 
 /**
  * The submitted question, framed in a box with the time it was entered:
  *
- *   ╭──────────────────────────────────────╮
- *   │ 14:32:05  > explain this repo        │
+ *   ╭─ You · 14:32:05 ─────────────────────╮
+ *   │ > how does the search work?          │
  *   ╰──────────────────────────────────────╯
  */
 export function submittedMessage(text: string, at = new Date()): string {
-  const width = Math.max(40, Math.min(terminalWidth() - 1, 120));
+  const width = boxWidth();
   const inner = width - 4;
   const stamp = at.toTimeString().slice(0, 8);
-  const prefix = `${stamp}  > `;
-  const available = Math.max(1, inner - prefix.length);
-  const shown = clip(text.replace(/\r?\n/g, " "), available);
-  const visible = prefix + shown;
-  const body = style.dim(stamp) + "  " + style.bold("> ") + shown;
-  const padding = " ".repeat(Math.max(1, inner - visible.length));
+  const title = `${style.bold("You")} ${style.dim("· " + stamp)}`;
+  const body = text.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "");
 
-  const top = style.gray("╭" + "─".repeat(width - 2) + "╮");
-  const bottom = style.gray("╰" + "─".repeat(width - 2) + "╯");
-  const middle = style.gray("│") + " " + body + padding + " " + style.gray("│");
+  const rows = wrapText(body, inner - 2).map((line, index) =>
+    framedLine((index === 0 ? style.bold("> ") : "  ") + line, inner)
+  );
 
-  return top + "\n" + middle + "\n" + bottom;
+  return [topBorder(title, width), ...rows, bottomBorder("", width)].join("\n");
 }
 
 export function modeStatus(mode: string): string {
@@ -330,7 +514,7 @@ export function modeStatus(mode: string): string {
 
 /** Print the new mode after shift+tab, above a freshly drawn prompt. */
 export function modeFlash(mode: string): void {
-  write("\r\u001b[2K\n  " + modeStatus(mode) + "\n");
+  write("\r\u001b[2K\n" + margin() + "  " + modeStatus(mode) + "\n");
 }
 
 /**
@@ -338,7 +522,7 @@ export function modeFlash(mode: string): void {
  * Shows as many matches as fit, plus a count of the rest.
  */
 export function suggestionLine(names: string[], hint = "tab to complete"): string {
-  const max = terminalWidth() - 8;
+  const max = boxWidth() - 8;
   const shown: string[] = [];
   let used = 0;
 
@@ -351,7 +535,7 @@ export function suggestionLine(names: string[], hint = "tab to complete"): strin
   const rest = names.length - shown.length;
   const more = rest > 0 ? `  +${rest}` : "";
   return (
-    style.dim("  ↳ ") +
+    margin() + style.dim("  ↳ ") +
     style.gray(shown.join("  ")) +
     style.dim(more) +
     style.dim(shown.length > 0 ? `   ${hint}` : "")
@@ -406,6 +590,65 @@ export function diffPreview(
 
   if (out.length === 0) out.push(style.gray("  (no visible change)"));
   return out.join("\n");
+}
+
+/**
+ * Wrap each line of (possibly coloured) text to `width` visible columns,
+ * indenting continuation rows and re-applying the active colour on each.
+ * `prefix` is added to every row (e.g. the centring margin).
+ */
+export function wrapAnsi(text: string, width: number, prefix = ""): string {
+  const SGR = /^\u001b\[[0-9;]*m/;
+  const rows: string[] = [];
+
+  for (const line of text.split("\n")) {
+    if (line === "") {
+      rows.push("");
+      continue;
+    }
+    let row = "";
+    let visible = 0;
+    let active = "";
+    let first = true;
+    let spaceAt = -1;
+    const hang = "  ";
+
+    for (let i = 0; i < line.length; ) {
+      const m = SGR.exec(line.slice(i));
+      if (m) {
+        row += m[0];
+        active = m[0] === `${ESC}0m` ? "" : m[0];
+        i += m[0].length;
+        continue;
+      }
+      const ch = String.fromCodePoint(line.codePointAt(i)!);
+      const limit = first ? width : width - hang.length;
+      if (visible >= limit) {
+        let head = row;
+        let carry = "";
+        const cut = spaceAt > (first ? 0 : hang.length) ? spaceAt : -1;
+        if (cut > 0) {
+          head = row.slice(0, cut);
+          carry = row.slice(cut + 1);
+        }
+        rows.push(prefix + head + (active ? `${ESC}0m` : ""));
+        row = hang + active + carry;
+        visible = [...carry.replace(ANSI, "")].length;
+        spaceAt = -1;
+        first = false;
+      }
+      if (ch === " ") spaceAt = row.length;
+      row += ch;
+      visible++;
+      i += ch.length;
+    }
+    rows.push(prefix + row);
+  }
+  return rows.join("\n");
+}
+
+export function previewWidth(): number {
+  return boxWidth();
 }
 
 export function codeBlock(text: string, maxLines = 24): string {

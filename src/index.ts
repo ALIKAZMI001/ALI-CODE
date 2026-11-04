@@ -153,7 +153,11 @@ async function main(): Promise<void> {
   }
 
   const reader = new LineReader();
-  const permissions = new Permissions((question) => reader.ask(question, false), cfg.permissionMode);
+  const permissions = new Permissions(
+    (question) => reader.ask(question, false),
+    cfg.permissionMode,
+    (count, render) => reader.select(count, render)
+  );
   const agent = new Agent(
     router,
     cfg,
@@ -167,6 +171,33 @@ async function main(): Promise<void> {
     agent.restore(resumed);
     if (resumed.provider === router.provider) router.model = resumed.model;
   }
+
+  // `ask_user` renders its own prompt and reuses the same reader.
+  agent.askUser = async (question, options) => {
+    ui.assistantEnd();
+    process.stdout.write(
+      "\n  " +
+        ui.style.orange("⏺") +
+        " " +
+        ui.style.bold("AskUser") +
+        " " +
+        ui.style.white(question) +
+        "\n"
+    );
+    for (const [index, option] of (options ?? []).entries()) {
+      process.stdout.write("     " + ui.style.gray(`${index + 1}. ${option}`) + "\n");
+    }
+
+    const answer = await reader.ask(ui.style.cyan("  › "), false);
+    if (answer === null) return null;
+
+    const trimmed = answer.trim();
+    if (options?.length && /^\d+$/.test(trimmed)) {
+      const pick = options[Number(trimmed) - 1];
+      if (pick) return pick;
+    }
+    return trimmed;
+  };
 
   const ctx: CommandContext = { agent, cfg, router, perms: permissions, reader, store };
 
@@ -236,7 +267,12 @@ async function main(): Promise<void> {
 
   // One-shot mode.
   if (cli.prompt.length > 0) {
-    await agent.run(cli.prompt.join(" "));
+    const prompt = cli.prompt.join(" ");
+    if (process.stdin.isTTY) {
+      process.stdout.write(ui.submittedMessage(prompt) + "\n");
+      ui.promptBottom(permissions.mode);
+    }
+    await agent.run(prompt);
     reader.close();
     return;
   }

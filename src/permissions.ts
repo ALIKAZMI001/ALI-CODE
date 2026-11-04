@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PermissionMode } from "./config.js";
-import { style, diffPreview, codeBlock, toolLabel } from "./ui.js";
+import { style, diffPreview, codeBlock, toolLabel, margin, wrapAnsi, previewWidth } from "./ui.js";
 
 export const READ_ONLY_TOOLS = new Set([
   "read_file",
@@ -11,7 +11,19 @@ export const READ_ONLY_TOOLS = new Set([
   "notebook_read",
   "web_fetch",
   "web_search",
+  "weather",
+  "ask_user",
+  "bash_output",
   "todo_write",
+]);
+
+/** Tools that only change files, so accept-edits can auto-approve them. */
+const EDIT_TOOLS = new Set([
+  "write_file",
+  "edit_file",
+  "multi_edit",
+  "notebook_edit",
+  "move_file",
 ]);
 
 /** Commands we refuse outright, in every mode including yolo. */
@@ -135,6 +147,11 @@ export const TOOL_DEFS = [
         properties: {
           command: { type: "string", description: "Command line to execute." },
           timeout_seconds: { type: "number", description: "Default 120, max 600." },
+          background: {
+            type: "boolean",
+            description:
+              "Run without waiting. Returns a shell id for bash_output and kill_shell.",
+          },
         },
         required: ["command"],
       },
@@ -246,6 +263,106 @@ export const TOOL_DEFS = [
           max_results: { type: "number", description: "Default 6, max 12." },
         },
         required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "weather",
+      description:
+        "Get current weather and a short forecast for any place using Open-Meteo (no API key). Use this instead of web_search for weather questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "City or place, e.g. \"Karachi\" or \"Paris, France\"." },
+          days: { type: "number", description: "Forecast days, 1-7. Default 3." },
+          units: { type: "string", enum: ["metric", "imperial"], description: "Default metric." },
+        },
+        required: ["location"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_user",
+      description:
+        "Ask the user a question when you need a decision or information you cannot find yourself. Do not use it for routine progress updates. Provide options when the answer is a choice.",
+      parameters: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "The question to ask." },
+          options: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional short choices, e.g. [\"Postgres\", \"SQLite\"].",
+          },
+        },
+        required: ["question"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "move_file",
+      description:
+        "Move or rename a file inside the workspace. Creates parent directories. Refuses to overwrite an existing file unless overwrite is true.",
+      parameters: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "Existing file path." },
+          to: { type: "string", description: "New path." },
+          overwrite: { type: "boolean", description: "Replace the destination if it exists." },
+        },
+        required: ["from", "to"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "delete_file",
+      description:
+        "Delete a file, or a directory when recursive is true. Prefer this over run_command with rm/Remove-Item.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "File or directory to delete." },
+          recursive: { type: "boolean", description: "Delete a directory and its contents." },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "bash_output",
+      description:
+        "Read the output collected so far from a background shell started with run_command(background=true).",
+      parameters: {
+        type: "object",
+        properties: {
+          shell_id: { type: "string", description: "Id returned by run_command, e.g. shell-1." },
+        },
+        required: ["shell_id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "kill_shell",
+      description:
+        "Stop a background shell started with run_command(background=true).",
+      parameters: {
+        type: "object",
+        properties: {
+          shell_id: { type: "string", description: "Id returned by run_command, e.g. shell-1." },
+        },
+        required: ["shell_id"],
       },
     },
   },
@@ -365,7 +482,44 @@ export function previewFor(name: string, input: any, cwd: string): string {
   }
 
   if (name === "run_command") {
-    return "  " + style.bold(String(input.command ?? ""));
+    const background = input.background ? style.dim("  (background)") : "";
+    return "  " + style.bold(String(input.command ?? "")) + background;
+  }
+
+  if (name === "move_file") {
+    return (
+      style.gray("  from  ") +
+      style.white(String(input.from ?? "")) +
+      "\n" +
+      style.gray("  to    ") +
+      style.white(String(input.to ?? ""))
+    );
+  }
+
+  if (name === "delete_file") {
+    return (
+      style.red("  delete  ") +
+      style.white(String(input.path ?? "")) +
+      (input.recursive ? style.red("  (recursive)") : "")
+    );
+  }
+
+  if (name === "weather") {
+    return style.gray(String(input.location ?? ""));
+  }
+
+  if (name === "ask_user") {
+    const options = Array.isArray(input.options) ? input.options : [];
+    return (
+      style.gray(String(input.question ?? "")) +
+      (options.length > 0
+        ? "\n" + options.map((option: string, i: number) => style.gray(`  ${i + 1}. ${option}`)).join("\n")
+        : "")
+    );
+  }
+
+  if (name === "bash_output" || name === "kill_shell") {
+    return style.gray(String(input.shell_id ?? ""));
   }
 
   if (name === "web_fetch") {
@@ -388,6 +542,11 @@ export function summarizeCall(name: string, input: any): string {
   if (name === "web_fetch") return String(input.url ?? "").slice(0, 90);
   if (name === "web_search") return String(input.query ?? "").slice(0, 90);
   if (name === "task") return String(input.description ?? input.prompt ?? "").slice(0, 90);
+  if (name === "move_file") return `${input.from ?? ""} → ${input.to ?? ""}`.slice(0, 90);
+  if (name === "delete_file") return String(input.path ?? "").slice(0, 90);
+  if (name === "weather") return String(input.location ?? "").slice(0, 90);
+  if (name === "ask_user") return String(input.question ?? "").slice(0, 90);
+  if (name === "bash_output" || name === "kill_shell") return String(input.shell_id ?? "");
   if (name === "todo_write") return "";
   return String(input.path ?? "");
 }
@@ -508,6 +667,31 @@ export function resultSummary(
     return [first];
   }
 
+  if (name === "move_file") {
+    return [`Moved ${input.from} → ${input.to}`];
+  }
+
+  if (name === "delete_file") {
+    return [`Deleted ${input.path}`];
+  }
+
+  if (name === "weather") {
+    return [`Weather · ${input.location}`];
+  }
+
+  if (name === "ask_user") {
+    return ["User answered"];
+  }
+
+  if (name === "bash_output") {
+    const lines = text.split(/\r?\n/).filter((line) => line.trim()).length;
+    return [`${plural(lines, "line")} of output`];
+  }
+
+  if (name === "kill_shell") {
+    return [text.split(/\r?\n/).find((line) => line.trim()) ?? "Shell stopped"];
+  }
+
   if (name === "run_command") {
     if (text.trim() === "") return ["(no output)"];
     const lines = text.replace(/^\s*\r?\n/, "").replace(/\s+$/, "").split(/\r?\n/);
@@ -529,7 +713,11 @@ export class Permissions {
 
   constructor(
     private ask: (question: string) => Promise<string | null>,
-    public mode: PermissionMode
+    public mode: PermissionMode,
+    private select?: (
+      count: number,
+      render: (index: number, active: boolean) => string
+    ) => Promise<number | null>
   ) {}
 
   setMode(mode: PermissionMode): void {
@@ -542,8 +730,10 @@ export class Permissions {
 
   autoAllowed(): string[] {
     const list = [...READ_ONLY_TOOLS];
-    if (this.mode === "accept-edits") list.push("edit_file", "write_file");
-    if (this.mode === "yolo") list.push("edit_file", "write_file", "run_command");
+    if (this.mode === "accept-edits") list.push(...EDIT_TOOLS);
+    if (this.mode === "yolo") {
+      list.push(...EDIT_TOOLS, "run_command", "delete_file", "kill_shell");
+    }
     return list.map((name) => `${name}`);
   }
 
@@ -591,10 +781,7 @@ export class Permissions {
       return false;
     }
 
-    if (
-      this.mode === "accept-edits" &&
-      (req.name === "write_file" || req.name === "edit_file")
-    ) {
+    if (this.mode === "accept-edits" && EDIT_TOOLS.has(req.name)) {
       return true;
     }
 
@@ -605,17 +792,46 @@ export class Permissions {
       ? `for \`${req.summary.length > 40 ? req.summary.slice(0, 39) + "…" : req.summary}\` commands`
       : `for ${label}`;
 
+    const pad = margin();
+    const indent = (text: string): string => wrapAnsi(text, previewWidth(), pad);
+    const choices = [
+      "Yes",
+      `Yes, and don't ask again ${again}`,
+      "No, and tell Ali what to do differently",
+    ];
+
     process.stdout.write(
       "\n" +
-        style.bold(`${label}(${req.summary})`) +
-        "\n\n" +
-        (req.preview.trim() ? req.preview + "\n\n" : "") +
-        style.bold("Do you want to proceed?") +
-        "\n" +
-        style.orange("❯ 1. Yes") +
-        "\n" +
-        `  2. Yes, and don't ask again ${again}\n` +
-        "  3. No, and tell Ali what to do differently\n\n"
+        (req.preview.trim() ? indent(req.preview) + "\n\n" : "") +
+        indent(style.bold("Do you want to proceed?")) +
+        "\n"
+    );
+
+    if (this.select) {
+      const picked = await this.select(choices.length, (i, active) =>
+        pad +
+        (active
+          ? style.orange(`❯ ${i + 1}. ${choices[i]}`)
+          : style.gray(`  ${i + 1}. ${choices[i]}`))
+      );
+      process.stdout.write(
+        pad + style.dim("  ↑/↓ to move · enter to confirm · esc to cancel") + "\n"
+      );
+      if (picked !== null) {
+        if (picked === 0) return true;
+        if (picked === 1) {
+          this.always.add(req.name);
+          return true;
+        }
+        return false;
+      }
+      // Cancelled with Esc, or no TTY: treat Esc as "No" when interactive.
+      if (process.stdin.isTTY) return false;
+    }
+
+    process.stdout.write(
+      choices.map((c, i) => pad + (i === 0 ? style.orange(`❯ 1. ${c}`) : `  ${i + 1}. ${c}`)).join("\n") +
+        "\n\n"
     );
 
     for (;;) {

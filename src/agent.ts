@@ -41,6 +41,9 @@ export class Agent {
   private denials = 0;
   private createdAt: string;
 
+  /** Set by the CLI so the `ask_user` tool can prompt on the terminal. */
+  askUser?: (question: string, options?: string[]) => Promise<string | null>;
+
   constructor(
     private router: Router,
     private cfg: Config,
@@ -57,6 +60,10 @@ export class Agent {
       history: this.history,
       todos: this.todos,
       runSubagent: (prompt) => this.runSubagent(prompt),
+      askUser: (question, options) =>
+        this.askUser
+          ? this.askUser(question, options)
+          : Promise.resolve("No interactive user is available; use your best judgment."),
     };
   }
 
@@ -327,7 +334,9 @@ export class Agent {
    * ------------------------------------------------------------------ */
 
   private async runSubagent(prompt: string): Promise<string> {
-    const tools = TOOL_DEFS.filter((tool) => tool.function.name !== "task");
+    const tools = TOOL_DEFS.filter(
+      (tool) => tool.function.name !== "task" && tool.function.name !== "ask_user"
+    );
     const subSystem =
       this.system +
       "\n\n# Subagent\nYou are a focused subagent. You cannot ask the user questions. " +
