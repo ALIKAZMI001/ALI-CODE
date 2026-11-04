@@ -9,7 +9,7 @@ import type { Permissions } from "./permissions.js";
 import type { LineReader } from "./input.js";
 import type { Store } from "./session.js";
 import { transcriptMarkdown } from "./session.js";
-import { style, info, warn, error } from "./ui.js";
+import { style, info, warn, error, block, clearScreen, banner, margin, boxWidth } from "./ui.js";
 import { truncate, formatBytes } from "./util.js";
 
 export interface CommandContext {
@@ -50,12 +50,20 @@ function isGitRepo(cwd: string): boolean {
 }
 
 function print(text: string): void {
-  process.stdout.write(text + "\n");
+  block(text);
 }
 
 /* ------------------------------------------------------------------ *
  * commands
  * ------------------------------------------------------------------ */
+
+/** Audio, speech and safety-classifier models cannot drive a coding agent. */
+const NON_CHAT = /whisper|orpheus|tts|speech|guard|safeguard|embed|moderation|transcri/i;
+
+/** OpenRouter marks free models with ":free"; every Groq model has a free tier. */
+function isFree(e: { provider: string; id: string }): boolean {
+  return e.provider === "groq" || e.id.endsWith(":free");
+}
 
 export const COMMANDS: Command[] = [
   {
@@ -95,7 +103,15 @@ export const COMMANDS: Command[] = [
     summary: "forget the conversation and start fresh",
     run: (ctx) => {
       ctx.agent.clear();
-      info("conversation cleared");
+      clearScreen();
+      banner({
+        model: ctx.router.model,
+        provider: ctx.router.providerLabel,
+        cwd: ctx.cfg.cwd,
+        mode: ctx.perms.mode,
+        keys: ctx.router.totalKeys(),
+      });
+      info("✓ conversation cleared — fresh start");
     },
   },
   {
@@ -138,42 +154,144 @@ export const COMMANDS: Command[] = [
   {
     name: "models",
     usage: "/models [filter]",
-    summary: "list models available to the current provider",
+    summary: "browse models from every provider (pick one to switch)",
     run: async (ctx, args) => {
       const filter = args.trim().toLowerCase();
-      const route = ctx.router.route;
-      const key = ctx.router.key;
-      if (!key) {
-        error("no usable key for this provider");
+      info("fetching models from your providers…");
+
+      interface Entry {
+        provider: ProviderName;
+        label: string;
+        id: string;
+      }
+
+      const lists = await Promise.all(
+        ctx.router.routes.map(async (route): Promise<Entry[]> => {
+          const key = route.pool.active();
+          if (!key) return [];
+          try {
+            const response = await fetch(`${route.spec.baseURL}/models`, {
+              headers: { Authorization: `Bearer ${key.value}` },
+              signal: AbortSignal.timeout(20_000),
+            });
+            if (!response.ok) {
+              warn(`${route.spec.label}: provider returned ${response.status}`);
+              return [];
+            }
+            const payload: any = await response.json();
+            return (payload.data ?? [])
+              .map((m: any) => String(m.id))
+              .filter((id: string) => !NON_CHAT.test(id))
+              .sort()
+              .map((id: string) => ({ provider: route.provider, label: route.spec.label, id }));
+          } catch (err: any) {
+            warn(`${route.spec.label}: ${err?.message ?? String(err)}`);
+            return [];
+          }
+        })
+      );
+
+      // Interleave providers so the first page shows all of them.
+      let entries: Entry[] = [];
+      for (let i = 0; lists.some((l) => i < l.length); i++) {
+        for (const l of lists) if (i < l.length) entries.push(l[i]);
+      }
+      if (filter) {
+        entries = entries.filter((e) =>
+          (e.label + " " + e.id + (isFree(e) ? " free" : "")).toLowerCase().includes(filter)
+        );
+      }
+      if (entries.length === 0) {
+        warn("no models matched");
         return;
       }
 
-      info(`fetching models from ${route.spec.label}…`);
-      try {
-        const response = await fetch(`${route.spec.baseURL}/models`, {
-          headers: { Authorization: `Bearer ${key.value}` },
-          signal: AbortSignal.timeout(20_000),
+      const PAGE = 10;
+      const tints: Record<string, (t: string) => string> = {
+        openrouter: style.cyan,
+        groq: style.orange,
+        openai: style.green,
+      };
+      const labelWidth = Math.max(...ctx.router.routes.map((r) => r.spec.label.length));
+      const counts = ctx.router.routes
+        .map((r) => {
+          const n = entries.filter((e) => e.provider === r.provider).length;
+          return n ? `${(tints[r.provider] ?? style.white)(r.spec.label)} ${style.dim(String(n))}` : "";
+        })
+        .filter(Boolean)
+        .join(style.dim("  ·  "));
+
+      const isCurrent = (e: Entry): boolean =>
+        e.provider === ctx.router.provider && e.id === ctx.router.model;
+
+      const row = (e: Entry, n: number, active: boolean): string => {
+        const tint = tints[e.provider] ?? style.white;
+        const tag = tint(e.label.padEnd(labelWidth));
+        const free = isFree(e) ? " " + style.green(e.provider === "groq" ? "free tier" : "free") : "";
+        const here = isCurrent(e) ? " " + style.yellow("● current") : "";
+        const room = Math.max(12, boxWidth() - labelWidth - 22);
+        const id = e.id.length > room ? e.id.slice(0, room - 1) + "…" : e.id;
+        const num = String(n).padStart(2);
+        return active
+          ? margin() + style.orange("❯ " + num + ".") + " " + tag + " " + style.bold(style.orange(id)) + free + here
+          : margin() + "  " + style.dim(num + ".") + " " + tag + " " + id + free + here;
+      };
+
+      block(
+        style.bold("Models") +
+          style.dim(` · ${entries.length} found${filter ? ` for "${filter}"` : ""}`) +
+          "\n" +
+          counts
+      );
+
+      const interactive = Boolean(process.stdin.isTTY);
+      let shown = Math.min(PAGE, entries.length);
+
+      if (!interactive) {
+        block(entries.slice(0, shown).map((e, i) => row(e, i + 1, false).slice(margin().length)).join("\n"));
+        if (entries.length > shown) info(`… ${entries.length - shown} more. Narrow with /models <filter>`);
+        return;
+      }
+
+      process.stdout.write("\n");
+      for (;;) {
+        const hasMore = shown < entries.length;
+        const count = shown + (hasMore ? 1 : 0);
+        const next = Math.min(PAGE, entries.length - shown);
+
+        const picked = await ctx.reader.select(count, (i, active) => {
+          if (i < shown) return row(entries[i], i + 1, active);
+          const text = `▾ Show ${next} more  (${entries.length - shown} left)`;
+          return margin() + (active ? style.orange("❯ " + text) : style.dim("  " + text));
         });
-        if (!response.ok) {
-          error(`provider returned ${response.status}`);
+
+        // Erase the menu either way; it is redrawn longer or replaced by a result.
+        process.stdout.write(`\u001b[${count}A\r\u001b[J`);
+
+        if (picked === null) {
+          info("cancelled · ↑/↓ move · enter select · esc cancel");
           return;
         }
-        const payload: any = await response.json();
-        let ids: string[] = (payload.data ?? [])
-          .map((model: any) => String(model.id))
-          .sort();
-        if (filter) ids = ids.filter((id) => id.toLowerCase().includes(filter));
-        if (ids.length === 0) {
-          warn("no models matched");
-          return;
+        if (hasMore && picked === shown) {
+          shown += next;
+          continue;
         }
-        const shown = ids.slice(0, 80);
-        print(shown.join("\n"));
-        if (ids.length > shown.length) {
-          info(`… ${ids.length - shown.length} more. Narrow with /models <filter>`);
+
+        const choice = entries[picked];
+        if (ctx.router.switchProvider(choice.provider, choice.id)) {
+          ctx.cfg.model = choice.id;
+          ctx.agent.persist();
+          block(
+            style.green("✓ ") +
+              "Now using " +
+              style.bold(choice.id) +
+              style.dim(" on ") +
+              (tints[choice.provider] ?? style.white)(choice.label)
+          );
+        } else {
+          error(`no usable keys for ${choice.label}`);
         }
-      } catch (err: any) {
-        error(`could not list models: ${err?.message ?? String(err)}`);
+        return;
       }
     },
   },

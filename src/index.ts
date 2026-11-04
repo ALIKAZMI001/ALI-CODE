@@ -176,7 +176,7 @@ async function main(): Promise<void> {
   agent.askUser = async (question, options) => {
     ui.assistantEnd();
     process.stdout.write(
-      "\n  " +
+      "\n" + ui.margin() + "  " +
         ui.style.orange("⏺") +
         " " +
         ui.style.bold("AskUser") +
@@ -185,10 +185,10 @@ async function main(): Promise<void> {
         "\n"
     );
     for (const [index, option] of (options ?? []).entries()) {
-      process.stdout.write("     " + ui.style.gray(`${index + 1}. ${option}`) + "\n");
+      process.stdout.write(ui.margin() + "     " + ui.style.gray(`${index + 1}. ${option}`) + "\n");
     }
 
-    const answer = await reader.ask(ui.style.cyan("  › "), false);
+    const answer = await reader.ask(ui.margin() + ui.style.cyan("  › "), false);
     if (answer === null) return null;
 
     const trimmed = answer.trim();
@@ -221,7 +221,6 @@ async function main(): Promise<void> {
     const next = CYCLE[(index + 1) % CYCLE.length] ?? "default";
     permissions.setMode(next);
     cfg.permissionMode = next;
-    ui.modeFlash(next);
     reader.reprompt(ui.promptFor(next));
   };
 
@@ -229,6 +228,9 @@ async function main(): Promise<void> {
   let lastCompleted = "";
   let lastMatches: string[] = [];
   let lastIndex = -1;
+
+  reader.onHint = (): string => ui.hintLine(permissions.mode);
+  reader.onTitle = (): string => ui.inputTitle(router.model, router.providerLabel);
 
   reader.onSuggest = (line: string): string | null => {
     if (!line.startsWith("/") || line.includes(" ")) return null;

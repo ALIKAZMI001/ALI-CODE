@@ -1,5 +1,5 @@
 import readline from "node:readline";
-import { submittedMessage } from "./ui.js";
+import { submittedMessage, margin, boxWidth, topBorder, bottomBorder, style } from "./ui.js";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 
@@ -15,7 +15,7 @@ export class LineReader {
   private waiters: Array<(line: string | null) => void> = [];
   private closed = false;
   private waiting = false;
-  private suggestionDrawn = false;
+  private framed = false;
   private boxLine = true;
   private readonly rl: readline.Interface;
   private promptText = "> ";
@@ -23,6 +23,10 @@ export class LineReader {
   onInterrupt?: () => void;
   /** Shift+Tab, the Claude Code shortcut for cycling permission modes. */
   onCycleMode?: () => void;
+  /** Title shown in the top edge of the input box (current model). */
+  onTitle?: () => string;
+  /** The default hint row under the input box (mode status). */
+  onHint?: () => string;
   /** Return the command-palette line to draw, or null to hide it. */
   onSuggest?: (line: string) => string | null;
   /** Return the completion for Tab, or null when there is nothing to complete. */
@@ -52,7 +56,6 @@ export class LineReader {
         if (!key) return;
 
         if (key.name === "tab" && (key.shift || sequence === "\u001b[Z")) {
-          this.clearSuggestion();
           this.onCycleMode?.();
           return;
         }
@@ -93,17 +96,20 @@ export class LineReader {
     this.promptText = prompt;
     this.boxLine = box;
     this.waiting = true;
+    this.framed =
+      box && Boolean(process.stdin.isTTY) && this.queue.length === 0 && !this.closed;
 
     if (process.stdin.isTTY) {
+      if (this.framed) this.openFrame();
       this.rl.setPrompt(prompt);
       this.rl.prompt();
+      if (this.framed) this.drawFrame();
     } else {
       process.stdout.write(prompt);
     }
 
     if (this.queue.length > 0) {
       this.waiting = false;
-      this.clearAfterSubmit();
       return Promise.resolve(this.finishLine(this.queue.shift()!));
     }
     if (this.closed) {
@@ -181,13 +187,13 @@ export class LineReader {
   /** Redraw the live input line, e.g. after the permission mode changes. */
   reprompt(prompt?: string): void {
     if (!process.stdin.isTTY) return;
-    this.clearSuggestion();
     if (prompt) {
       this.promptText = prompt;
       this.rl.setPrompt(prompt);
     }
     process.stdout.write("\r\u001b[2K");
     this.rl.prompt();
+    this.drawFrame();
     setImmediate(() => this.refreshSuggestions());
   }
 
@@ -196,65 +202,66 @@ export class LineReader {
   }
 
   /* ------------------------------------------------------------------ *
-   * Suggestion line (below the input)
+   * Input box: ╭──╮ / │ > text │ / ╰──╯ plus a hint row underneath
    * ------------------------------------------------------------------ */
 
-  private desiredColumn(): number {
-    const promptWidth = [...this.promptText.replace(ANSI, "")].length;
-    return promptWidth + (this.rl.cursor ?? 0);
-  }
-
-  private moveToInput(): void {
-    const column = this.desiredColumn();
-    process.stdout.write("\r");
-    if (column > 0) process.stdout.write(`\u001b[${column}C`);
-  }
-
-  private clearSuggestion(): void {
-    if (!this.suggestionDrawn) return;
-    process.stdout.write("\u001b[B\r\u001b[2K\u001b[A");
-    this.suggestionDrawn = false;
-    this.moveToInput();
-  }
-
-  /** After Enter, the cursor already sits on the suggestion line: wipe it. */
-  private clearAfterSubmit(): void {
-    if (!this.suggestionDrawn) return;
-    process.stdout.write("\r\u001b[2K");
-    this.suggestionDrawn = false;
+  /** Reserve rows for the box and put the cursor on the input row. */
+  private openFrame(): void {
+    const hint = this.onHint?.() ?? "";
+    process.stdout.write(
+      topBorder(this.onTitle?.() ?? "") + "\n" + "\n" + bottomBorder() + "\n" + hint + "\u001b[2A\r"
+    );
   }
 
   /**
-   * Replace the live prompt line with the framed, timestamped history entry.
-   * The cursor is one line below the input after Enter (suggestion or blank).
+   * (Re)draw the right edge, bottom edge and hint row around the input row.
+   * Skipped once the text is wide enough to wrap, since the box cannot grow.
+   */
+  private drawFrame(hint?: string): void {
+    if (!this.framed || !process.stdin.isTTY) return;
+
+    const promptWidth = [...this.promptText.replace(ANSI, "")].length;
+    const used = promptWidth + [...(this.rl.line ?? "")].length;
+    const rightCol = margin().length + boxWidth(); // 1-based column of "│"
+    if (used + 1 >= rightCol) return;
+
+    const row = hint ?? this.onHint?.() ?? "";
+    process.stdout.write(
+      "\u001b7" +
+        `\r\u001b[${rightCol}G` +
+        style.gray("│") +
+        "\u001b[B\r\u001b[2K" +
+        bottomBorder() +
+        "\u001b[B\r\u001b[2K" +
+        row +
+        "\u001b8"
+    );
+  }
+
+  /**
+   * Replace the live input box with the framed, timestamped history entry.
+   * After Enter the cursor sits on the row below the input.
    */
   private renderSubmitted(line: string): void {
-    this.suggestionDrawn = false;
+    const wasFramed = this.framed;
+    this.framed = false;
     if (!process.stdin.isTTY) return;
 
-    // After Enter the cursor sits one row below the prompt (suggestion line or
-    // blank); erase that row and the prompt row before drawing the box.
     // A long question wraps over several terminal rows: erase all of them.
     const cols = Math.max(1, process.stdout.columns ?? 80);
     const used = [...this.promptText.replace(ANSI, "")].length + [...line].length;
     const rows = Math.max(1, Math.ceil(used / cols));
-    process.stdout.write("\r\u001b[2K" + "\u001b[A".repeat(rows) + "\r\u001b[J");
+    const up = wasFramed ? rows + 1 : rows;
+    process.stdout.write("\r\u001b[2K" + "\u001b[A".repeat(up) + "\r\u001b[J");
     if (!this.boxLine || !line.trim()) return;
 
     process.stdout.write(submittedMessage(line) + "\n");
   }
 
   private refreshSuggestions(): void {
-    if (!process.stdin.isTTY || !this.waiting || !this.onSuggest) return;
-
-    const text = this.onSuggest(this.rl.line ?? "");
-    this.clearSuggestion();
-    if (!text) return;
-
-    // "\n" makes room (scrolling if needed); "\u001b[A" climbs back to input.
-    process.stdout.write("\n\r\u001b[2K" + text + "\u001b[A");
-    this.suggestionDrawn = true;
-    this.moveToInput();
+    if (!process.stdin.isTTY || !this.waiting || !this.framed) return;
+    const text = this.onSuggest?.(this.rl.line ?? "") ?? null;
+    this.drawFrame(text ?? undefined);
   }
 
   /** Piped stdin is not echoed by the terminal, so keep the output readable. */
@@ -264,7 +271,6 @@ export class LineReader {
   }
 
   close(): void {
-    this.clearSuggestion();
     this.finish();
     this.rl.close();
   }

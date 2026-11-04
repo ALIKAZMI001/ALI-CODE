@@ -26,6 +26,11 @@ export const style = {
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 
+/** Wipe the visible screen and the scrollback, then home the cursor. */
+export function clearScreen(): void {
+  if (process.stdout.isTTY) process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
+}
+
 export function write(text: string): void {
   process.stdout.write(text);
 }
@@ -127,7 +132,7 @@ export function margin(): string {
   return " ".repeat(Math.max(1, Math.floor((cols - boxWidth()) / 2)));
 }
 
-function boxWidth(): number {
+export function boxWidth(): number {
   return Math.max(40, Math.min(terminalWidth() - 2, 100));
 }
 
@@ -446,6 +451,12 @@ export function toolEnd(ok: boolean, summary: string | string[]): void {
  * Messages
  * ------------------------------------------------------------------ */
 
+/** Print a multi-line block inside the centred layout, wrapped to fit. */
+export function block(text: string): void {
+  assistantEnd();
+  write(wrapAnsi(text, boxWidth(), margin()) + "\n");
+}
+
 export function info(text: string): void {
   assistantEnd();
   write(margin() + style.gray(text) + "\n");
@@ -466,16 +477,32 @@ export function error(text: string): void {
  * ------------------------------------------------------------------ */
 
 export function promptFor(mode: string): string {
-  if (mode === "plan") return margin() + style.blue("> ");
-  return margin() + style.bold("> ");
+  const arrow = mode === "plan" ? style.blue("> ") : style.bold("> ");
+  return margin() + style.gray("│") + " " + arrow;
 }
 
 export function promptTop(): void {
   write("\n");
 }
 
-export function promptBottom(mode: string): void {
-  write(margin() + "  " + modeStatus(mode) + "\n");
+export function promptBottom(_mode: string): void {
+  // The mode line now lives under the input box while typing.
+}
+
+/** Top-edge label of the input box: the model that will answer. */
+export function inputTitle(model: string, provider: string): string {
+  const room = Math.max(10, boxWidth() - provider.length - 14);
+  return (
+    style.orange("✻") +
+    " " +
+    style.bold(clip(model, room)) +
+    style.dim(" · " + provider)
+  );
+}
+
+/** Hint row drawn under the input box. */
+export function hintLine(mode: string): string {
+  return margin() + "  " + modeStatus(mode);
 }
 
 /**
