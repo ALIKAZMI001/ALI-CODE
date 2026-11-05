@@ -1,3 +1,5 @@
+import { packageInfo } from "./paths.js";
+
 const ESC = "\u001b[";
 const colorEnabled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
 
@@ -72,7 +74,7 @@ export function banner(info: {
     return edge + " " + " ".repeat(left) + text + " ".repeat(right) + " " + edge;
   };
 
-  const title = ` ${style.bold(style.orange("✻ Ali Code"))} ${style.dim("v1.0")} `;
+  const title = ` ${style.bold(style.orange("✻ Ali Code"))} ${style.dim("v" + packageInfo().version)} `;
   const topFill = Math.max(0, width - 4 - visibleLength(title));
   const top = style.orange("╭──") + title + style.orange("─".repeat(topFill) + "╮");
   const bottom = style.orange("╰" + "─".repeat(width - 2) + "╯");
