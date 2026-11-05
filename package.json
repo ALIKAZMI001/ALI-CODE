@@ -1,6 +1,6 @@
 {
   "name": "ali-code",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Ali Code — a Claude Code-style coding agent for your terminal",
   "type": "module",
   "license": "UNLICENSED",
