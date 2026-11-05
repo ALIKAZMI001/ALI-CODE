@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { configRoot } from "./paths.js";
 
 export interface Usage {
   prompt: number;
@@ -34,15 +35,9 @@ export class Store {
     this.cwd = cwd;
     const hash = crypto.createHash("sha1").update(cwd).digest("hex").slice(0, 12);
 
-    // Keep using ~/.mini when it is the only one that exists, so old sessions
-    // stay resumable after the rename.
-    const home = os.homedir();
-    const preferred = path.join(home, ".ali-code");
-    const legacy = path.join(home, ".mini");
-    const root =
-      fs.existsSync(preferred) || !fs.existsSync(legacy) ? preferred : legacy;
-
-    this.dir = path.join(root, "sessions", hash);
+    // Same data directory as the user config (keeps legacy ~/.mini sessions
+    // resumable, and honours ALI_HOME).
+    this.dir = path.join(configRoot(), "sessions", hash);
   }
 
   save(session: PersistedSession): void {

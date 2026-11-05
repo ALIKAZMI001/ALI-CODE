@@ -23,16 +23,16 @@ line, and the numbered permission dialog.
   3. Be as specific as you would with another engineer for the best results
   4. Run /init to create an AGENTS.md file with instructions for Ali
 
-  ※ OpenRouter · claude-sonnet-4.5 · 6 keys · default permissions
+  ※ Free (no key) · openai-fast · no key needed · default permissions
 
-╭────────────────────────────────────────────────────────────────────╮
-│ 14:32:05  > add a /health route                                    │
-╰────────────────────────────────────────────────────────────────────╯
+╭─ You · 14:32:05 ────────────────────────────────────────────────╮
+│ > add a /health route                                          │
+╰────────────────────────────────────────────────────────────────╯
   ? for shortcuts
 
-────────────────────────────────────────────────────────────────────────
-I'll add the route, then run the tests to check it.
-────────────────────────────────────────────────────────────────────────
+╭─ ✻ Ali · 14:32:06 ──────────────────────────────────────────────╮
+│ I'll add the route, then run the tests to check it.            │
+╰────────────────────────────────────────────────────── 1.8s ╯
 
 ⏺ Read(src/app.ts)
   ⎿  Read 84 lines
@@ -45,32 +45,166 @@ I'll add the route, then run the tests to check it.
      42 tests passed
 ```
 
-Every submitted question is boxed with the time it was entered, responses are
-framed with rules above and below, and shell commands carry their start time.
+Every question and every answer is framed in a box with the time it was
+entered, and shell commands carry their start time.
 
-Works with **OpenRouter**, **Groq**, **OpenAI**, or any OpenAI-compatible API.
+Works with a **free model out of the box**, and with **OpenRouter**, **Groq**,
+**OpenAI**, or any OpenAI-compatible API when you add a key.
 
-## Quick start
+## Requirements
+
+- **Node.js 20 or newer** (check with `node -v`)
+- Windows 10/11 (PowerShell), macOS or Linux (bash)
+- `git` is optional but recommended
+- **No API key required** — an API key is optional and only needed for better
+  or faster models
+
+## Install
+
+One command. No token, no registry setup, no repository clone, no API key, and
+no `.env` file to share.
 
 ```bash
+npm install -g ali-code
+```
+
+Or try it without installing:
+
+```bash
+npx ali-code
+```
+
+Both `ali` and `ali-code` become available. Then open any project and run:
+
+```bash
+cd C:\Users\you\Desktop\MyProject
+ali
+```
+
+That is the whole setup. On first run Ali Code uses a free model and starts
+working immediately, like OpenCode and Claude Code.
+
+### Free by default, your key optional
+
+Without any configuration Ali Code uses the free anonymous model
+(`openai-fast`, GPT-OSS 20B). Nothing to sign up for and nothing to share.
+
+If you want stronger or faster models, add your own key:
+
+```bash
+ali config set openrouter sk-or-v1-your-key   # or groq / openai
+ali doctor                                    # verify everything
+```
+
+The key is saved **on your machine only**, in `~/.ali-code/.env`
+(`C:\Users\you\.ali-code\.env` on Windows), readable only by you. It is never
+sent to the Ali Code author, never committed to a project, and never shared
+between users. Paid providers are preferred automatically; the free model
+remains the fallback.
+
+Multiple keys rotate automatically: `ali config set openrouter key1,key2`.
+
+### Use it in any project
+
+```bash
+ali                                  # interactive session in this folder
+ali "add a health-check route"       # one task, then exit
+ali -y "run the tests and fix them"  # no approval prompts
+ali -C ../other-repo                 # work in another folder
+ali --resume                         # continue the last session here
+ali --version                        # print the installed version
+ali --help                           # usage
+```
+
+`ali code …` is still accepted as an alias for `ali …`.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `ali` | Start the interactive session in the current folder |
+| `ali config` | Show saved settings (keys are masked) |
+| `ali config set <name> <value>` | Save a key or preference (`openrouter`, `groq`, `openai`, `provider`, `model`, `fallback`, `permission-mode`) |
+| `ali config unset <name>` | Remove a saved setting |
+| `ali config path` | Print where settings are stored |
+| `ali doctor` | Check Node, config, API keys, shell, git and folder access |
+| `ali update` | Check for a newer version; `ali update --yes` installs it |
+| `ali --version` / `ali --help` | Version and usage |
+
+## Where things are stored
+
+| What | Location |
+|---|---|
+| Installed program (read-only) | your npm global prefix, e.g. `%AppData%\npm\node_modules\ali-code` |
+| API keys and preferences | `~/.ali-code/.env` (`C:\Users\you\.ali-code\.env`) |
+| Saved sessions | `~/.ali-code/sessions/` |
+| Your project | the folder you ran `ali` in — nothing of Ali Code's is written there |
+
+Set `ALI_HOME` to use a different data directory.
+
+**Precedence (highest first):** real environment variables → `.env.local` in
+the project → `.env` in the project → `~/.ali-code/.env`. A project can
+therefore override your personal defaults without touching them. Keys are never
+printed in full (`ali config` and `ali doctor` mask them), and the settings
+file is created readable only by you where the OS supports it.
+
+## Updating
+
+```bash
+ali update            # shows whether a newer version exists
+ali update --yes      # installs it
+# or directly:
+npm install -g ali-code@latest
+```
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `ali` is not recognized | Close and reopen the terminal. Check `npm config get prefix` is on your `PATH`. |
+| `npm error 404` on install | Make sure the package name is exactly `ali-code` and you are on the public npm registry (`npm config get registry`). |
+| `No API keys found` (old versions) | Update with `npm install -g ali-code@latest`. Current versions need no key and use a free model automatically. |
+| Free model is slow or busy | That is the anonymous free tier. Add your own key with `ali config set openrouter <key>`, then `ali doctor`. |
+| PowerShell: "running scripts is disabled" | Use `ali.cmd`, or run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. |
+| Wrong provider or model | `ali config` shows saved values; a project `.env` or environment variable may be overriding them. |
+| A stale key keeps being used | Check for machine-wide variables such as `GROQ_API_KEY`: `ali doctor` lists what is active. |
+| Anything else | `ali doctor` |
+
+## Developing Ali Code
+
+```bash
+git clone https://github.com/ALIKAZMI001/ALI-CODE.git
+cd ALI-CODE
 npm install
 cp .env.example .env        # Windows: copy .env.example .env
-# put your keys in .env
-npm run build
-npm link                    # makes the `ali` command available everywhere
+npm run dev                 # run from source with tsx
+npm run build               # compile to dist/
+npm run typecheck
+npm test
+npm link                    # use your working copy as the global `ali`
 ```
 
-Now, from any project folder:
+### Publishing a new version (maintainers)
+
+The public npm package is `ali-code`. Anyone can then install it with
+`npm install -g ali-code`.
 
 ```bash
-ali code                                # interactive session
-ali code "add a health-check route"     # one task, then exit
-ali code -y "run the tests and fix them"  # no approval prompts
-ali code -C ../other-repo               # work in another folder
-ali code --resume                       # continue the last session here
+npm login                   # once, with your npmjs.com account
+npm version patch           # or minor / major — updates package.json and tags
+npm run typecheck && npm test
+npm pack --dry-run          # inspect exactly what will ship
+npm publish                 # prepublishOnly re-runs typecheck + tests
 ```
 
-`npm run dev` runs the same thing from source. `ali` on its own also works.
+The package contents are limited by the `files` allowlist in `package.json`:
+only compiled `dist/**/*.js`, `README.md` and `.env.example` ship — no source,
+tests, source maps or `.env` files. Compiled JavaScript is readable, as with
+Claude Code and OpenCode.
+
+For a scoped name instead (`@yourname/ali-code`), keep
+`"publishConfig": { "access": "public" }` and run
+`npm publish --access public`.
 
 ## Keys: pools, rotation and failover
 
@@ -191,7 +325,9 @@ Do you want to proceed?
 
 ```
 src/
-  index.ts        CLI parsing (`ali code`), REPL, prompt, shift+tab, signals
+  index.ts        CLI parsing, REPL, prompt, shift+tab, signals
+  admin.ts        `ali config`, `ali doctor`, `ali update`
+  paths.ts        package root, version, user data directory
   agent.ts        the loop: stream → tool calls → results → repeat
   keys.ts         key pools, round-robin rotation, failover, provider routing
   tools.ts        read/write/edit/multi-edit/glob/grep/list/shell/notebook/web/task/todo
@@ -232,9 +368,10 @@ Design choices worth stealing:
 
 ## Configuration
 
-`.env` next to where you launch `ali`, or in the target folder:
+Settings come from `~/.ali-code/.env` (written by `ali config set`), a `.env` in the folder you launch `ali` from, or real environment variables (see "Where things are stored"):
 
 ```env
+# Optional. Leave everything out to use the free model.
 ALI_PROVIDER=openrouter
 ALI_MODEL=anthropic/claude-sonnet-4.5
 ALI_FALLBACK_PROVIDERS=groq

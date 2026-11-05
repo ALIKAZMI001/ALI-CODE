@@ -194,6 +194,10 @@ export class Router {
     const lines: string[] = [];
     this.routes.forEach((route, routeIndex) => {
       const marker = routeIndex === this.index ? "▸" : " ";
+      if (route.provider === "free") {
+        lines.push(`${marker} ${route.spec.label}  ${route.model}  no key needed`);
+        return;
+      }
       lines.push(
         `${marker} ${route.spec.label}  ${route.model}  ${
           route.pool.aliveCount()
@@ -214,6 +218,20 @@ export class Router {
   }
 }
 
+/**
+ * The OpenAI route can point at any OpenAI-compatible endpoint through
+ * ALI_BASE_URL (for example a team proxy). Its "key" is then that endpoint's
+ * access token.
+ */
+function specFor(provider: ProviderName): ProviderSpec {
+  const spec = PROVIDERS[provider];
+  const custom = process.env.ALI_BASE_URL?.trim();
+  if (provider === "openai" && custom) {
+    return { ...spec, baseURL: custom.replace(/\/+$/, ""), label: "Team proxy", keyPattern: undefined };
+  }
+  return spec;
+}
+
 export function buildRouter(cfg: Config): Router {
   const order: ProviderName[] = [
     cfg.primary,
@@ -232,12 +250,12 @@ export function buildRouter(cfg: Config): Router {
 
     routes.push({
       provider,
-      spec: PROVIDERS[provider],
+      spec: specFor(provider),
       model,
       pool: new KeyPool(
         keys.map((value) => ({
           value,
-          label: maskKey(value),
+          label: provider === "free" ? "no key" : maskKey(value),
           dead: false,
           cooldownUntil: 0,
         }))

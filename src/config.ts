@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { userEnvFile } from "./paths.js";
 
-export type ProviderName = "openrouter" | "groq" | "openai";
+export type ProviderName = "free" | "openrouter" | "groq" | "openai";
 export type PermissionMode = "default" | "accept-edits" | "plan" | "yolo";
 
 export const PERMISSION_MODES: PermissionMode[] = [
@@ -24,6 +25,13 @@ export interface ProviderSpec {
 }
 
 export const PROVIDERS: Record<ProviderName, ProviderSpec> = {
+  free: {
+    baseURL: "https://text.pollinations.ai/openai",
+    model: "openai-fast",
+    keyEnv: "",
+    keysEnv: "",
+    label: "Free (no key)",
+  },
   openrouter: {
     baseURL: "https://openrouter.ai/api/v1",
     model: "anthropic/claude-sonnet-4.5",
@@ -74,8 +82,14 @@ export interface CliOptions {
   permissionMode?: PermissionMode;
 }
 
+/** Providers that need a key, in the order we prefer them. */
+export const KEYED_PROVIDERS: ProviderName[] = ["openrouter", "groq", "openai"];
+
 /** All keys configured for a provider, de-duplicated and prefix-checked. */
 export function collectKeys(provider: ProviderName): string[] {
+  // The free route is anonymous: no key, no signup.
+  if (provider === "free") return ["free"];
+
   const spec = PROVIDERS[provider];
   const raw: string[] = [];
 
@@ -132,9 +146,16 @@ function parseDotenv(file: string, override: boolean): void {
   }
 }
 
+/**
+ * Precedence (highest first): real environment variables, the project's
+ * .env.local, the project's .env, then the user-level ~/.ali-code/.env that
+ * "ali config" writes. Values already in the environment are only overridden
+ * by .env.local.
+ */
 export function loadEnvFiles(cwd: string): void {
   parseDotenv(path.join(cwd, ".env"), false);
   parseDotenv(path.join(cwd, ".env.local"), true);
+  parseDotenv(userEnvFile(), false);
   applyEnvAliases();
 }
 
@@ -186,16 +207,17 @@ export function resolveConfig(opts: CliOptions): Config {
   }
 
   if (!primary) {
-    primary = (["openrouter", "groq", "openai"] as ProviderName[]).find(hasKeys) ?? "openrouter";
+    primary = KEYED_PROVIDERS.find(hasKeys) ?? "free";
   }
 
   if (!hasKeys(primary)) {
-    const alternative = (["openrouter", "groq", "openai"] as ProviderName[]).find(
-      (p) => p !== primary && hasKeys(p)
-    );
+    const alternative =
+      KEYED_PROVIDERS.find((p) => p !== primary && hasKeys(p)) ??
+      (hasKeys("free") ? "free" : undefined);
     if (!alternative) {
       throw new Error(
-        `No API keys found. Put OPENROUTER_API_KEYS=key1,key2 (or GROQ_API_KEYS / OPENAI_API_KEYS) in .env in ${invocationCwd}.`
+        `No API keys found. Run: ali config set openrouter <key1,key2>   (or groq / openai). ` +
+          `Run "ali doctor" to check your setup.`
       );
     }
     process.stderr.write(
@@ -213,7 +235,7 @@ export function resolveConfig(opts: CliOptions): Config {
       return name !== primary && hasKeys(name);
     });
 
-  const autoFallbacks = (["openrouter", "groq", "openai"] as ProviderName[]).filter(
+  const autoFallbacks = ([...KEYED_PROVIDERS, "free"] as ProviderName[]).filter(
     (p) => p !== primary && hasKeys(p)
   );
 

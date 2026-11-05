@@ -313,7 +313,7 @@ export const COMMANDS: Command[] = [
         info(`now using ${ctx.router.describe()}`);
         ctx.agent.persist();
       } else {
-        error(`no usable keys for ${name}. Add them to .env, then restart.`);
+        error(`no usable keys for ${name}. Add one with: ali config set ${name} <key>`);
       }
     },
   },
@@ -620,9 +620,10 @@ export async function dispatch(
 }
 
 export function providerSummary(): string {
-  return (["openrouter", "groq", "openai"] as ProviderName[])
+  const paid = (["openrouter", "groq", "openai"] as ProviderName[])
     .map((provider) => `${provider}:${collectKeys(provider).length}`)
     .join("  ");
+  return `free:always  ${paid}`;
 }
 
 /**

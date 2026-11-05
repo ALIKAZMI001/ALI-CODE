@@ -1,20 +1,49 @@
 {
   "name": "ali-code",
-  "version": "1.0.0",
-  "private": true,
-  "type": "module",
+  "version": "1.0.1",
   "description": "Ali Code — a Claude Code-style coding agent for your terminal",
+  "type": "module",
+  "license": "UNLICENSED",
+  "author": "ALIKAZMI001",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ALIKAZMI001/ALI-CODE.git"
+  },
+  "homepage": "https://github.com/ALIKAZMI001/ALI-CODE#readme",
+  "bugs": {
+    "url": "https://github.com/ALIKAZMI001/ALI-CODE/issues"
+  },
+  "keywords": [
+    "cli",
+    "ai",
+    "coding-agent",
+    "terminal",
+    "claude-code",
+    "opencode"
+  ],
   "bin": {
-    "ali": "./dist/index.js",
-    "ali-code": "./dist/index.js"
+    "ali": "dist/index.js",
+    "ali-code": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "!dist/**/*.map",
+    ".env.example",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc",
     "start": "node dist/index.js",
     "link": "npm run build && npm link",
     "test": "npm run build && node --test \"tests/*.test.mjs\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "engines": {
     "node": ">=20"

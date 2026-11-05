@@ -13,8 +13,10 @@ import { LineReader } from "./input.js";
 import { Store, newSessionId, type PersistedSession } from "./session.js";
 import { dispatch, matchCommands, type CommandContext } from "./commands.js";
 import * as ui from "./ui.js";
+import { runAdmin } from "./admin.js";
+import { packageInfo } from "./paths.js";
 
-const VERSION = "1.0.0";
+const VERSION = packageInfo().version;
 
 interface Cli {
   prompt: string[];
@@ -31,16 +33,24 @@ const HELP = `
 ${ui.style.bold("Ali Code")} — a Claude Code-style coding agent for your terminal
 
 ${ui.style.bold("Usage")}
-  ali code                        start an interactive session in this folder
-  ali code "add a /health route"  run one task, then exit
-  ali code --dir ../other-repo    work in another folder
-  ali code --resume               continue the most recent session here
+  ali                             start an interactive session in this folder
+  ali "add a /health route"       run one task, then exit
+  ali --dir ../other-repo         work in another folder
+  ali --resume                    continue the most recent session here
+  ("ali code …" is accepted as an alias for "ali …")
+
+${ui.style.bold("Commands")}
+  ali config                      show / set API keys and preferences
+  ali doctor                      check your installation and configuration
+  ali update                      check for a newer version (--yes to install it)
+
+  ${ui.style.dim("No API key? It runs on a free model automatically. A key is optional.")}
 
 ${ui.style.bold("Options")}
   -y, --yolo                    never ask before using tools
       --permission-mode <mode>  default | accept-edits | plan | yolo
   -m, --model <id>              override the model
-      --provider <name>         openrouter | groq | openai
+      --provider <name>         free | openrouter | groq | openai
   -C, --dir <path>              working directory
       --resume[=<session-id>]   resume a saved session
       --max-iterations <n>      cap on tool round-trips (default 40)
@@ -130,8 +140,16 @@ function parseArgs(argv: string[]): Cli {
   return cli;
 }
 
+/**
+ * Ali Code works with no setup: when no API key is configured it uses the free
+ * anonymous model. Keys are optional and belong to whoever runs the tool.
+ */
 async function main(): Promise<void> {
+  const adminExit = await runAdmin(process.argv.slice(2));
+  if (adminExit !== null) process.exit(adminExit);
+
   const cli = parseArgs(process.argv.slice(2));
+
   const cfg = resolveConfig({
     provider: cli.provider,
     model: cli.model,
@@ -263,7 +281,7 @@ async function main(): Promise<void> {
     provider: router.providerLabel,
     cwd: cfg.cwd,
     mode: permissions.mode,
-    keys: router.totalKeys(),
+    keys: router.provider === "free" ? 0 : router.totalKeys(),
     resumed: resumed?.id,
   });
 

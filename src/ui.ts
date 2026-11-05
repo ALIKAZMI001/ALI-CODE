@@ -116,7 +116,9 @@ export function banner(info: {
       "\n" +
       pad + "  " + style.orange("※") + " " +
       style.gray(
-        `${info.provider} · ${info.model} · ${info.keys} key${info.keys === 1 ? "" : "s"} · ${modeName}`
+        `${info.provider} · ${info.model} · ${
+          info.keys === 0 ? "no key needed" : `${info.keys} key${info.keys === 1 ? "" : "s"}`
+        } · ${modeName}`
       ) +
       "\n\n"
   );
