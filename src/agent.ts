@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { APIConnectionError } from "openai";
 import type { Config } from "./config.js";
 import { executeTool, type ToolContext } from "./tools.js";
 import { TOOL_DEFS, summarizeCall, previewFor, resultSummary, type Permissions } from "./permissions.js";
@@ -165,7 +166,12 @@ export class Agent {
   }
 
   private explainApiError(err: any): void {
-    if (err?.status === 401 || err?.status === 403) {
+    if (err instanceof APIConnectionError) {
+      ui.info(
+        `Could not reach ${this.router.providerLabel}. Check your network, or a corporate ` +
+          `proxy/VPN on this machine may be blocking it — ali doctor can help narrow it down.`
+      );
+    } else if (err?.status === 401 || err?.status === 403) {
       ui.info(
         `All keys for ${this.router.providerLabel} were rejected. Run /keys, or add a working key to .env.`
       );
@@ -192,14 +198,19 @@ export class Agent {
         lastError = err;
         if (err?.name === "AbortError" || this.abort?.signal.aborted) throw err;
 
+        // A pure network/TLS/DNS failure never reaches the HTTP layer, so it has
+        // no status at all — treat it as failover-eligible too, same as a 5xx,
+        // rather than letting it fall straight through to the user.
+        const isConnectionFailure = err instanceof APIConnectionError;
         const status = Number(err?.status ?? 0);
-        if (!FAILOVER_STATUS.has(status)) throw err;
+        if (!isConnectionFailure && !FAILOVER_STATUS.has(status)) throw err;
 
         const from = this.router.describe();
-        if (!this.router.failover(status)) throw err;
+        if (!this.router.failover(isConnectionFailure ? 0 : status)) throw err;
 
+        const label = isConnectionFailure ? "connection error" : String(status);
         ui.assistantEnd();
-        ui.warn(`  ↻ ${status} on ${from} — retrying with ${this.router.describe()}`);
+        ui.warn(`  ↻ ${label} on ${from} — retrying with ${this.router.describe()}`);
       }
     }
 

@@ -74,6 +74,11 @@ export class KeyPool {
     } else if (status === 429) {
       key.cooldownUntil = Date.now() + 60_000;
       key.reason = "rate limited";
+    } else if (status === 0) {
+      // No HTTP status at all: a network/TLS/DNS failure, not the key's fault.
+      // Short cooldown — try it again soon rather than marking it dead.
+      key.cooldownUntil = Date.now() + 20_000;
+      key.reason = "connection error";
     } else {
       key.cooldownUntil = Date.now() + 20_000;
       key.reason = `error ${status}`;
