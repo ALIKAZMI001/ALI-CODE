@@ -136,7 +136,7 @@ function configHelp(): void {
 
 ${style.bold("Names")}
   openrouter | groq | openai        optional API keys (comma-separated pool)
-  provider                          free | openrouter | groq | openai
+  provider                          free | community | openrouter | groq | openai
   model                             default model id
   fallback                          fallback providers, e.g. groq
   permission-mode                   ${PERMISSION_MODES.join(" | ")}
@@ -147,8 +147,9 @@ ${style.bold("Examples")}
   ali config set groq gsk_xxxx
   ali config set model cohere/north-mini-code:free
 
-No key is required: Ali Code uses a free model out of the box.
-A key is optional and gives you better or faster models.
+No key is required: Ali Code uses a shared, rate-limited model out of the
+box, with a fully free fallback if that is ever busy. A key is optional and
+gives you better or faster models with no shared limits.
 
 Settings are stored in ${userEnvFile()}
 A .env in a project folder, or a real environment variable, takes precedence.`);
@@ -307,7 +308,7 @@ function runDoctor(): number {
   loadEnvFiles(cwd);
   let anyKeys = false;
   for (const name of Object.keys(PROVIDERS) as ProviderName[]) {
-    if (name === "free") continue;
+    if (name === "free" || name === "community") continue;
     const keys = collectKeys(name);
     if (keys.length > 0) {
       anyKeys = true;
@@ -317,7 +318,8 @@ function runDoctor(): number {
     }
   }
   if (!anyKeys) {
-    ok(`free model: always available (${PROVIDERS.free.model}), no key needed`);
+    ok(`community model: always available (${PROVIDERS.community.model}), shared and rate-limited, no key needed`);
+    out(style.gray(`  · ${PROVIDERS.free.model} (fully free, no limits) is the automatic fallback`));
   }
 
   try {

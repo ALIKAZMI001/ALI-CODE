@@ -44,13 +44,13 @@ ${ui.style.bold("Commands")}
   ali doctor                      check your installation and configuration
   ali update                      check for a newer version (--yes to install it)
 
-  ${ui.style.dim("No API key? It runs on a free model automatically. A key is optional.")}
+  ${ui.style.dim("No API key? Runs on a shared, rate-limited model automatically. A key is optional.")}
 
 ${ui.style.bold("Options")}
   -y, --yolo                    never ask before using tools
       --permission-mode <mode>  default | accept-edits | plan | yolo
   -m, --model <id>              override the model
-      --provider <name>         free | openrouter | groq | openai
+      --provider <name>         free | community | openrouter | groq | openai
   -C, --dir <path>              working directory
       --resume[=<session-id>]   resume a saved session
       --max-iterations <n>      cap on tool round-trips (default 40)
@@ -281,7 +281,7 @@ async function main(): Promise<void> {
     provider: router.providerLabel,
     cwd: cfg.cwd,
     mode: permissions.mode,
-    keys: router.provider === "free" ? 0 : router.totalKeys(),
+    keys: router.provider === "free" || router.provider === "community" ? 0 : router.totalKeys(),
     resumed: resumed?.id,
   });
 

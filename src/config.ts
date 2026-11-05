@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { userEnvFile } from "./paths.js";
 
-export type ProviderName = "free" | "openrouter" | "groq" | "openai";
+export type ProviderName = "free" | "community" | "openrouter" | "groq" | "openai";
 export type PermissionMode = "default" | "accept-edits" | "plan" | "yolo";
 
 export const PERMISSION_MODES: PermissionMode[] = [
@@ -24,6 +24,17 @@ export interface ProviderSpec {
   extraHeaders?: Record<string, string>;
 }
 
+/**
+ * The zero-config default is a public, rate-limited token for a Cloudflare
+ * Worker the maintainer funds with their own Groq/OpenRouter keys (see
+ * proxy/worker.js). It is intentionally public — this file ships in the npm
+ * package and the public GitHub repo — so the Worker enforces per-visitor and
+ * daily caps server-side rather than relying on the token being secret.
+ * Anyone can still bring their own key (ali config set groq/openrouter/openai)
+ * to skip the shared tier and its limits entirely.
+ */
+const COMMUNITY_TOKEN = "ali-code-public-2026";
+
 export const PROVIDERS: Record<ProviderName, ProviderSpec> = {
   free: {
     baseURL: "https://text.pollinations.ai/openai",
@@ -31,6 +42,13 @@ export const PROVIDERS: Record<ProviderName, ProviderSpec> = {
     keyEnv: "",
     keysEnv: "",
     label: "Free (no key)",
+  },
+  community: {
+    baseURL: "https://ali-proxy.alikazmi4.workers.dev/v1",
+    model: "openai/gpt-oss-120b",
+    keyEnv: "",
+    keysEnv: "",
+    label: "Community (shared, rate-limited)",
   },
   openrouter: {
     baseURL: "https://openrouter.ai/api/v1",
@@ -89,6 +107,8 @@ export const KEYED_PROVIDERS: ProviderName[] = ["openrouter", "groq", "openai"];
 export function collectKeys(provider: ProviderName): string[] {
   // The free route is anonymous: no key, no signup.
   if (provider === "free") return ["free"];
+  // The community route uses one shared, rate-limited token (see PROVIDERS).
+  if (provider === "community") return [COMMUNITY_TOKEN];
 
   const spec = PROVIDERS[provider];
   const raw: string[] = [];
@@ -207,12 +227,13 @@ export function resolveConfig(opts: CliOptions): Config {
   }
 
   if (!primary) {
-    primary = KEYED_PROVIDERS.find(hasKeys) ?? "free";
+    primary = KEYED_PROVIDERS.find(hasKeys) ?? "community";
   }
 
   if (!hasKeys(primary)) {
     const alternative =
       KEYED_PROVIDERS.find((p) => p !== primary && hasKeys(p)) ??
+      (primary !== "community" && hasKeys("community") ? "community" : undefined) ??
       (hasKeys("free") ? "free" : undefined);
     if (!alternative) {
       throw new Error(
@@ -235,7 +256,7 @@ export function resolveConfig(opts: CliOptions): Config {
       return name !== primary && hasKeys(name);
     });
 
-  const autoFallbacks = ([...KEYED_PROVIDERS, "free"] as ProviderName[]).filter(
+  const autoFallbacks = ([...KEYED_PROVIDERS, "community", "free"] as ProviderName[]).filter(
     (p) => p !== primary && hasKeys(p)
   );
 

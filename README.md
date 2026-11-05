@@ -23,7 +23,7 @@ line, and the numbered permission dialog.
   3. Be as specific as you would with another engineer for the best results
   4. Run /init to create an AGENTS.md file with instructions for Ali
 
-  ※ Free (no key) · openai-fast · no key needed · default permissions
+  ※ Community (shared, rate-limited) · openai/gpt-oss-120b · no key needed · default permissions
 
 ╭─ You · 14:32:05 ────────────────────────────────────────────────╮
 │ > add a /health route                                          │
@@ -48,8 +48,9 @@ line, and the numbered permission dialog.
 Every question and every answer is framed in a box with the time it was
 entered, and shell commands carry their start time.
 
-Works with a **free model out of the box**, and with **OpenRouter**, **Groq**,
-**OpenAI**, or any OpenAI-compatible API when you add a key.
+Works with a **real shared model out of the box, no key needed**, and with
+**OpenRouter**, **Groq**, **OpenAI**, or any OpenAI-compatible API when you add
+a key.
 
 ## Requirements
 
@@ -81,15 +82,21 @@ cd C:\Users\you\Desktop\MyProject
 ali
 ```
 
-That is the whole setup. On first run Ali Code uses a free model and starts
+That is the whole setup. On first run Ali Code uses a shared model and starts
 working immediately, like OpenCode and Claude Code.
 
-### Free by default, your key optional
+### Zero-config by default, your key optional
 
-Without any configuration Ali Code uses the free anonymous model
-(`openai-fast`, GPT-OSS 20B). Nothing to sign up for and nothing to share.
+Without any configuration Ali Code routes through a small shared proxy
+(`openai/gpt-oss-120b`) funded by the maintainer, so you get a real model with
+nothing to sign up for and nothing to share. That shared tier is
+**rate-limited** (per visitor and per day) to keep it sustainable for
+everyone; if it's ever busy or you hit the limit, Ali Code automatically falls
+back to a fully free, unlimited anonymous model (`openai-fast`) so it never
+just stops working.
 
-If you want stronger or faster models, add your own key:
+If you want stronger or faster models with no shared limits at all, add your
+own key:
 
 ```bash
 ali config set openrouter sk-or-v1-your-key   # or groq / openai
@@ -99,8 +106,8 @@ ali doctor                                    # verify everything
 The key is saved **on your machine only**, in `~/.ali-code/.env`
 (`C:\Users\you\.ali-code\.env` on Windows), readable only by you. It is never
 sent to the Ali Code author, never committed to a project, and never shared
-between users. Paid providers are preferred automatically; the free model
-remains the fallback.
+between users. Paid providers are preferred automatically ahead of both the
+shared and the free tier.
 
 Multiple keys rotate automatically: `ali config set openrouter key1,key2`.
 
@@ -163,8 +170,8 @@ npm install -g ali-code@latest
 |---|---|
 | `ali` is not recognized | Close and reopen the terminal. Check `npm config get prefix` is on your `PATH`. |
 | `npm error 404` on install | Make sure the package name is exactly `ali-code` and you are on the public npm registry (`npm config get registry`). |
-| `No API keys found` (old versions) | Update with `npm install -g ali-code@latest`. Current versions need no key and use a free model automatically. |
-| Free model is slow or busy | That is the anonymous free tier. Add your own key with `ali config set openrouter <key>`, then `ali doctor`. |
+| `No API keys found` (old versions) | Update with `npm install -g ali-code@latest`. Current versions need no key and use a shared model automatically. |
+| Shared model is slow, busy, or rate-limited | That is the shared community tier — it falls back to the fully free tier automatically, or add your own key with `ali config set openrouter <key>`, then `ali doctor`. |
 | PowerShell: "running scripts is disabled" | Use `ali.cmd`, or run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. |
 | Wrong provider or model | `ali config` shows saved values; a project `.env` or environment variable may be overriding them. |
 | A stale key keeps being used | Check for machine-wide variables such as `GROQ_API_KEY`: `ali doctor` lists what is active. |
@@ -371,7 +378,7 @@ Design choices worth stealing:
 Settings come from `~/.ali-code/.env` (written by `ali config set`), a `.env` in the folder you launch `ali` from, or real environment variables (see "Where things are stored"):
 
 ```env
-# Optional. Leave everything out to use the free model.
+# Optional. Leave everything out to use the shared community model.
 ALI_PROVIDER=openrouter
 ALI_MODEL=anthropic/claude-sonnet-4.5
 ALI_FALLBACK_PROVIDERS=groq

@@ -198,6 +198,10 @@ export class Router {
         lines.push(`${marker} ${route.spec.label}  ${route.model}  no key needed`);
         return;
       }
+      if (route.provider === "community") {
+        lines.push(`${marker} ${route.spec.label}  ${route.model}  shared · rate-limited`);
+        return;
+      }
       lines.push(
         `${marker} ${route.spec.label}  ${route.model}  ${
           route.pool.aliveCount()
@@ -255,7 +259,7 @@ export function buildRouter(cfg: Config): Router {
       pool: new KeyPool(
         keys.map((value) => ({
           value,
-          label: provider === "free" ? "no key" : maskKey(value),
+          label: provider === "free" ? "no key" : provider === "community" ? "shared" : maskKey(value),
           dead: false,
           cooldownUntil: 0,
         }))

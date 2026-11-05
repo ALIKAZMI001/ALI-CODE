@@ -211,6 +211,8 @@ export const COMMANDS: Command[] = [
         openrouter: style.cyan,
         groq: style.orange,
         openai: style.green,
+        community: style.magenta,
+        free: style.gray,
       };
       const labelWidth = Math.max(...ctx.router.routes.map((r) => r.spec.label.length));
       const counts = ctx.router.routes
@@ -623,7 +625,7 @@ export function providerSummary(): string {
   const paid = (["openrouter", "groq", "openai"] as ProviderName[])
     .map((provider) => `${provider}:${collectKeys(provider).length}`)
     .join("  ");
-  return `free:always  ${paid}`;
+  return `community:shared  free:always  ${paid}`;
 }
 
 /**
