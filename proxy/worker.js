@@ -36,7 +36,22 @@
  * still on it falls back to ali-code's own always-free model automatically.
  */
 
-const ALLOWED_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+const ALLOWED_MODELS = [
+  // Groq models
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+
+  // OpenRouter Free models
+  "cohere/north-mini-code:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemma-4-31b-it:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "liquid/lfm-2.5-2.6b:free",
+  "nvidia/nemotron-3.5-lightning:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+];
 const MAX_TOKENS_CAP = 8192;
 const DEFAULT_PUBLIC_PER_IP_HOUR = 15;
 const DEFAULT_PUBLIC_DAILY_CAP = 300;
@@ -159,7 +174,7 @@ export default {
           continue;
         }
         // Rate limited, bad key, out of credit or upstream down: try the next key.
-        if ([401, 402, 403, 429].includes(response.status) || response.status >= 500) {
+        if ([400, 401, 402, 403, 404, 422, 429].includes(response.status) || response.status >= 500) {
           last = response;
           continue;
         }
