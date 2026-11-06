@@ -231,6 +231,11 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", onInterrupt);
   reader.onInterrupt = onInterrupt;
+  // Esc only cancels an in-progress response; unlike Ctrl+C it never exits
+  // the app when idle, matching Claude Code's convention.
+  reader.onEscape = (): void => {
+    if (agent.busy) agent.interrupt();
+  };
 
   // Shift+Tab cycles the modes Claude Code cycles. yolo is opt-in via flags.
   const CYCLE: PermissionMode[] = ["default", "accept-edits", "plan"];

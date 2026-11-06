@@ -21,6 +21,8 @@ export class LineReader {
   private promptText = "> ";
 
   onInterrupt?: () => void;
+  /** Esc: cancel an in-progress response. Unlike onInterrupt, never exits the app. */
+  onEscape?: () => void;
   /** Shift+Tab, the Claude Code shortcut for cycling permission modes. */
   onCycleMode?: () => void;
   /** Title shown in the top edge of the input box (current model). */
@@ -57,6 +59,11 @@ export class LineReader {
 
         if (key.name === "tab" && (key.shift || sequence === "\u001b[Z")) {
           this.onCycleMode?.();
+          return;
+        }
+
+        if (key.name === "escape") {
+          this.onEscape?.();
           return;
         }
 
