@@ -24,6 +24,8 @@ export interface ToolContext {
   runSubagent?: (prompt: string) => Promise<string>;
   /** Supplied by the CLI so the `ask_user` tool can reach the terminal. */
   askUser?: (question: string, options?: string[]) => Promise<string | null>;
+  /** Set for the duration of a run() so a tool can bail out when the user interrupts. */
+  signal?: AbortSignal;
 }
 
 export const MAX_TOOL_OUTPUT = 30_000;
@@ -335,21 +337,7 @@ function runCommand(input: any, ctx: ToolContext): Promise<string> {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const finish = (note: string) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const body = [
-        note,
-        stdout.trim() ? `stdout:\n${stdout.trim()}` : "",
-        stderr.trim() ? `stderr:\n${stderr.trim()}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-      resolve(truncate(body || `${note}\n(no output)`, MAX_TOOL_OUTPUT));
-    };
-
-    const timer = setTimeout(() => {
+    const kill = (): void => {
       try {
         if (isWindows && child.pid) {
           spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
@@ -361,8 +349,34 @@ function runCommand(input: any, ctx: ToolContext): Promise<string> {
       } catch {
         /* ignore */
       }
+    };
+
+    const finish = (note: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ctx.signal?.removeEventListener("abort", onAbort);
+      const body = [
+        note,
+        stdout.trim() ? `stdout:\n${stdout.trim()}` : "",
+        stderr.trim() ? `stderr:\n${stderr.trim()}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      resolve(truncate(body || `${note}\n(no output)`, MAX_TOOL_OUTPUT));
+    };
+
+    const timer = setTimeout(() => {
+      kill();
       finish(`timed out after ${timeoutMs / 1000}s and was killed`);
     }, timeoutMs);
+
+    const onAbort = (): void => {
+      kill();
+      finish("interrupted by user and was killed");
+    };
+    if (ctx.signal?.aborted) onAbort();
+    else ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (chunk: Buffer) => {
       if (stdout.length < MAX_TOOL_OUTPUT * 2) stdout += chunk.toString();

@@ -101,6 +101,7 @@ export class Agent {
   async run(userInput: string): Promise<RunResult> {
     this.messages.push({ role: "user", content: userInput });
     this.abort = new AbortController();
+    this.ctx.signal = this.abort.signal;
     this.denials = 0;
     let succeeded = false;
 
@@ -130,11 +131,19 @@ export class Agent {
         }
 
         for (const call of calls) {
-          this.messages.push({
-            role: "tool",
-            tool_call_id: call.id,
-            content: await this.handleToolCall(call),
-          });
+          // A run_command already in flight gets killed inside handleToolCall;
+          // this skips any calls still queued behind it in the same turn while
+          // still answering every tool_call_id so the next request stays valid.
+          const content = this.abort?.signal.aborted
+            ? "Error: interrupted by user before this tool ran."
+            : await this.handleToolCall(call);
+          this.messages.push({ role: "tool", tool_call_id: call.id, content });
+        }
+
+        if (this.abort?.signal.aborted) {
+          ui.assistantEnd();
+          ui.info("  ⎿  Interrupted by user");
+          return { ok: false, aborted: true };
         }
 
         if (this.denials >= 3) {
@@ -160,6 +169,7 @@ export class Agent {
       return { ok: false, aborted: false };
     } finally {
       this.abort = null;
+      this.ctx.signal = undefined;
       if (succeeded) this.router.nextKey();
       this.persist();
     }
