@@ -187,6 +187,58 @@ with the published one — update that with `git pull && npm run build`.
 | A stale key keeps being used | Check for machine-wide variables such as `GROQ_API_KEY`: `ali doctor` lists what is active. |
 | Anything else | `ali doctor` |
 
+## Architecture
+
+```text
+                [ User CLI / Terminal Input ]
+                              │
+                              ▼ (Interactive REPL Parser)
+  ┌───────────────────────────────────────────────────────┐
+  │     System Prompt & Workspace Context (AGENTS.md)     │
+  └───────────────────────────┬───────────────────────────┘
+                              │
+                              ▼
+  ┌───────────────────────────────────────────────────────┐
+  │       Resilient Key-Pool & Failover API Router        │
+  │    OpenRouter  ──►  Groq Cloud  ──►  OpenAI Direct    │
+  │  (Automatic Key Rotation • Cooldown • Auto-Fallback)  │
+  └───────────────────────────┬───────────────────────────┘
+                              │
+                              ▼ (Streaming Token Evaluation)
+  ┌───────────────────────────────────────────────────────┐
+  │      Autonomous Agent Engine & Tool Calling Loop      │
+  └───────────────────────────┬───────────────────────────┘
+                              │
+                              ▼ (Dispatched Tool Calls)
+  ┌───────────────────────────────────────────────────────┐
+  │   Security & Permission Gate (Workspace Sandboxed)    │
+  │    Modes: default (confirm) │ accept-edits │ yolo     │
+  └───────────────────────────┬───────────────────────────┘
+                              │
+            ┌─────────────────┼─────────────────┐
+            ▼                 ▼                 ▼
+    ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
+    │ File System   │ │ Shell Command │ │ Subagent Task │
+    │ Read/Write/Edt│ │ Bash / Git    │ │ Delegated Job │
+    └───────┬───────┘ └───────┬───────┘ └───────┬───────┘
+            └─────────────────┼─────────────────┘
+                              │
+                              ▼ (Sanitized Execution Result ≤ 30k chars)
+  ┌───────────────────────────────────────────────────────┐
+  │   Context Compaction Engine (Auto-Summarize @ 75%)    │
+  └───────────────────────────┬───────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              ▼ (Next Action Loop)            ▼ (Task Completed)
+    ┌───────────────────┐           ┌───────────────────┐
+    │ Feed History Back │           │ Claude-Style UI   │
+    │ (↺ Next Turn Loop)│           │ Boxed Diff & Text │
+    └─────────┬─────────┘           └─────────┬─────────┘
+              │                               │
+              └──► (Next Iteration)           ▼
+                                  [ User Terminal / REPL ]
+```
+
 ## Developing Ali Code
 
 ```bash
