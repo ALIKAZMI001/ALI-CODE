@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   PROVIDERS,
   PERMISSION_MODES,
@@ -356,7 +356,7 @@ function runDoctor(): number {
  * ali update
  * ------------------------------------------------------------------ */
 
-function compareVersions(a: string, b: string): number {
+export function compareVersions(a: string, b: string): number {
   const pa = a.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
   const pb = b.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length, 3); i++) {
@@ -366,35 +366,108 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-function runUpdate(args: string[]): number {
+/** The command that installs the newest published version. */
+export function updateCommand(): string {
+  return `npm install -g ${packageInfo().name}@latest`;
+}
+
+/**
+ * True when this copy runs from a source checkout or `npm link` rather than an
+ * installed package. The published package ships only dist/, so a src/ folder
+ * or a .git directory means "a developer's working copy". Installing from the
+ * registry would silently replace that link with an older published build.
+ */
+export function isSourceCheckout(): boolean {
+  const root = packageRoot();
+  return fs.existsSync(path.join(root, ".git")) || fs.existsSync(path.join(root, "src"));
+}
+
+/** Run a shell command without blocking the event loop (so a live session keeps drawing). */
+function runShell(
+  command: string,
+  opts: { inherit?: boolean; timeoutMs?: number } = {}
+): Promise<{ code: number | null; stdout: string }> {
+  return new Promise((resolve) => {
+    // shell:true so Windows resolves npm.cmd.
+    const child = spawn(command, {
+      shell: true,
+      windowsHide: true,
+      stdio: opts.inherit ? ["ignore", "inherit", "inherit"] : ["ignore", "pipe", "ignore"],
+    });
+
+    let stdout = "";
+    let done = false;
+    const finish = (code: number | null): void => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code, stdout });
+    };
+    const timer = opts.timeoutMs
+      ? setTimeout(() => {
+          finish(null);
+          child.kill();
+        }, opts.timeoutMs)
+      : undefined;
+
+    child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.on("error", () => finish(null));
+    child.on("close", (code) => finish(code));
+  });
+}
+
+export type UpdateCheck =
+  | { kind: "lookup-failed" }
+  | { kind: "current"; installed: string; latest: string }
+  | { kind: "available"; installed: string; latest: string };
+
+/** Ask the npm registry for the newest published version and compare. */
+export async function checkForUpdate(): Promise<UpdateCheck> {
+  const pkg = packageInfo();
+  const view = await runShell(`npm view ${pkg.name} version`, { timeoutMs: 30_000 });
+  const latest = view.stdout.trim().split(/\r?\n/).pop() ?? "";
+  if (view.code !== 0 || !/^\d/.test(latest)) return { kind: "lookup-failed" };
+
+  return compareVersions(pkg.version, latest) >= 0
+    ? { kind: "current", installed: pkg.version, latest }
+    : { kind: "available", installed: pkg.version, latest };
+}
+
+/** Install the newest published version globally. npm's own output is shown live. */
+export async function installLatest(): Promise<boolean> {
+  const result = await runShell(updateCommand(), { inherit: true });
+  return result.code === 0;
+}
+
+async function runUpdate(args: string[]): Promise<number> {
   const pkg = packageInfo();
   const install = args.includes("--yes") || args.includes("-y") || args.includes("install");
-  const command = `npm install -g ${pkg.name}@latest`;
+  const command = updateCommand();
 
   out(`${style.bold("Ali Code update")} ${style.gray(`· installed ${pkg.version}`)}`);
 
-  // shell:true so Windows resolves npm.cmd.
-  const view = spawnSync(`npm view ${pkg.name} version`, {
-    shell: true,
-    encoding: "utf8",
-    timeout: 30_000,
-  });
-  const latest = (view.stdout ?? "").trim().split(/\r?\n/).pop() ?? "";
+  const check = await checkForUpdate();
 
-  if (view.status !== 0 || !/^\d/.test(latest)) {
+  if (check.kind === "lookup-failed") {
     warn("could not look up the latest version from npm.");
     out(style.gray("  Check your network and that you are using the public npm registry (npm config get registry)."));
     out(`  To update manually, run:\n\n    ${style.bold(command)}\n`);
     return install ? 1 : 0;
   }
 
-  const cmp = compareVersions(pkg.version, latest);
-  if (cmp >= 0) {
-    ok(`you are on the latest version (${pkg.version})`);
+  if (check.kind === "current") {
+    ok(`you are on the latest version (${check.installed})`);
     return 0;
   }
 
-  out(`  ${style.yellow("↑")} version ${style.bold(latest)} is available`);
+  out(`  ${style.yellow("↑")} version ${style.bold(check.latest)} is available`);
+
+  if (isSourceCheckout()) {
+    warn("this copy runs from a source checkout (npm link), so it will not be replaced.");
+    out(style.gray("  Update it with:  git pull && npm run build\n"));
+    return 0;
+  }
+
   if (!install) {
     out(`\n  Run:  ${style.bold(command)}`);
     out(style.gray("  or:   ali update --yes   (runs that command for you)\n"));
@@ -402,9 +475,8 @@ function runUpdate(args: string[]): number {
   }
 
   out(style.gray(`\n  running: ${command}\n`));
-  const result = spawnSync(command, { shell: true, stdio: "inherit" });
-  if (result.status === 0) {
-    ok(`updated to ${latest}. Restart Ali Code to use it.`);
+  if (await installLatest()) {
+    ok(`updated to ${check.latest}. Restart Ali Code to use it.`);
     return 0;
   }
   bad("update failed — see the npm output above.");

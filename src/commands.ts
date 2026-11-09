@@ -11,6 +11,8 @@ import type { Store } from "./session.js";
 import { transcriptMarkdown } from "./session.js";
 import { style, info, warn, error, block, clearScreen, banner, margin, boxWidth } from "./ui.js";
 import { truncate, formatBytes } from "./util.js";
+import { checkForUpdate, installLatest, isSourceCheckout, updateCommand } from "./admin.js";
+import { packageInfo } from "./paths.js";
 
 export interface CommandContext {
   agent: Agent;
@@ -566,7 +568,81 @@ export const COMMANDS: Command[] = [
   {
     name: "version",
     summary: "print the version",
-    run: () => print("ali-code 1.0.0"),
+    run: () => print(`ali-code ${packageInfo().version}`),
+  },
+  {
+    name: "update",
+    aliases: ["upgrade"],
+    usage: "/update [--yes]",
+    summary: "check npm for a newer version and install it",
+    run: async (ctx, args) => {
+      const installNow = /(^|\s)(--yes|-y|install)(\s|$)/.test(args);
+      const pkg = packageInfo();
+
+      info(`checking npm for a newer ${pkg.name}… (installed ${pkg.version})`);
+      const check = await checkForUpdate();
+
+      if (check.kind === "lookup-failed") {
+        warn("could not look up the latest version from npm.");
+        info(`check your network, or update manually with: ${updateCommand()}`);
+        return;
+      }
+
+      if (check.kind === "current") {
+        block(style.green("✓ ") + `you are on the latest version (${check.installed})`);
+        return;
+      }
+
+      block(
+        style.yellow("↑ ") +
+          `version ${style.bold(check.latest)} is available ` +
+          style.dim(`(you have ${check.installed})`)
+      );
+
+      // A source checkout / `npm link` must not be replaced by the registry copy.
+      if (isSourceCheckout()) {
+        warn("this copy runs from a source checkout (npm link), so /update will not replace it.");
+        info("update it with: git pull && npm run build");
+        return;
+      }
+
+      let install = installNow;
+      if (!install) {
+        if (!process.stdin.isTTY) {
+          info(`run: ${updateCommand()}   (or /update --yes)`);
+          return;
+        }
+
+        const choices = ["Install now", "Not now"];
+        const picked = await ctx.reader.select(choices.length, (i, active) =>
+          margin() +
+          (active
+            ? style.orange(`❯ ${i + 1}. ${choices[i]}`)
+            : style.gray(`  ${i + 1}. ${choices[i]}`))
+        );
+        // Erase the menu; the result is reported below.
+        process.stdout.write(`\u001b[${choices.length}A\r\u001b[J`);
+        install = picked === 0;
+      }
+
+      if (!install) {
+        info("skipped — run /update any time to install it.");
+        return;
+      }
+
+      info(`running: ${updateCommand()}`);
+      if (await installLatest()) {
+        block(
+          style.green("✓ ") +
+            `updated to ${check.latest}. Quit and restart Ali Code to use it.`
+        );
+      } else {
+        error(
+          "update failed — see the npm output above. If it keeps failing, quit Ali Code " +
+            "and run `ali update --yes` from a normal terminal."
+        );
+      }
+    },
   },
 ];
 

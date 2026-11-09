@@ -157,12 +157,22 @@ file is created readable only by you where the OS supports it.
 
 ## Updating
 
+From your terminal:
+
 ```bash
 ali update            # shows whether a newer version exists
 ali update --yes      # installs it
 # or directly:
 npm install -g ali-code@latest
 ```
+
+Or without leaving a session, type **`/update`**. It checks npm, tells you if a
+newer version exists, and offers an **Install now / Not now** menu (`/update
+--yes` skips the menu). Restart Ali Code afterwards to run the new version.
+
+If you run Ali Code from a source checkout or `npm link` (for development),
+`/update` and `ali update` report what's available but never replace your copy
+with the published one — update that with `git pull && npm run build`.
 
 ## Troubleshooting
 
@@ -275,6 +285,8 @@ cannot recurse) and report back a summary.
 | `/status` | folder, provider, model, keys, git branch, todos |
 | `/keys` | every key, its state, and cooldowns |
 | `/doctor` | check node, `.env`, keys and connectivity |
+| `/update [--yes]` | check npm for a newer version and install it |
+| `/version` | print the installed version |
 | `/model [id]` | show or change the model |
 | `/models [filter]` | list models from the current provider |
 | `/provider [name]` | list routes or switch provider |
