@@ -39,6 +39,10 @@ export class LineReader {
       input: process.stdin,
       output: process.stdout,
       terminal: Boolean(process.stdin.isTTY),
+      // A lone Esc is ambiguous with the start of an arrow-key sequence, so
+      // readline waits before reporting it (500 ms by default) — long enough
+      // that tapping Esc to stop a response feels like nothing happened.
+      escapeCodeTimeout: 50,
     });
 
     this.rl.on("line", (line) => {
